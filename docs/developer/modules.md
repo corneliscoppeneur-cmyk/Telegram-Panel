@@ -591,6 +591,73 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 
 > 注意：模块项目引用 `MudBlazor` 主要用于编译期；运行时会跟随宿主加载。若模块需要自带静态资源（CSS/JS），宿主不会自动暴露模块的 `wwwroot`，你需要在 `MapEndpoints` 中自行提供静态文件访问（或把样式/脚本内联到页面里）。
 
+## Vue 后台迁移后的模块页面约定
+
+后台管理界面已经迁移到 Vue SPA，入口在 `/ui` 下。模块开发时需要区分两种页面形态：
+
+1. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}`。
+2. **宿主 Vue 原生页面**：页面代码在宿主 `frontend/src/views/extensions/`，数据由模块提供 `/api/panel/extensions/{slug}` 管理接口。
+
+如果模块没有被宿主 Vue 页面接管，不需要为了 Vue 迁移重写模块。宿主的通用 Vue 页面会用 iframe 加载旧模块页面：
+
+```text
+/ui/ext/{moduleId}/{pageKey}
+  -> /ext/{moduleId}/{pageKey}?legacy=1&embed=1
+```
+
+如果模块已经有对应的 Vue 原生页面，就必须在模块里补齐管理端 API。否则 Vue 页面会请求不到接口，通常表现为 `404`，并回退到旧页面。
+
+### 给 Vue 页面提供管理端 API
+
+在模块入口的 `MapEndpoints` 中注册管理端接口，推荐统一放在：
+
+```text
+/api/panel/extensions/{module-slug}
+```
+
+示例：
+
+```csharp
+public void MapEndpoints(IEndpointRouteBuilder endpoints, ModuleHostContext context)
+{
+    var group = endpoints.MapGroup("/api/panel/extensions/my-module");
+
+    var configuration = endpoints.ServiceProvider.GetService<IConfiguration>();
+    if (configuration?.GetValue<bool>("AdminAuth:Enabled") == true)
+        group.RequireAuthorization();
+
+    group.MapGet("", GetPageAsync);
+    group.MapPost("/settings", SaveSettingsAsync);
+}
+```
+
+约定：
+
+- 这个前缀只用于后台管理接口，不要放匿名外链或公开 API。
+- 返回 DTO，不要直接返回 EF 实体或内部运行态对象。
+- Vue 页面需要的列表、设置、运行态快照，优先通过一个 `GET ""` 聚合返回，避免页面首次加载打很多请求。
+- 修改接口后必须递增 `manifest.json` 的 `version`，重新打包 `.tpm` 并更新生产模块包。
+- 新接口上线前保留旧 Razor 页面，便于回退和排障。
+
+### 导航与路由怎么写
+
+模块仍然可以通过 `GetNavItems` 返回 `/ext/{moduleId}/{pageKey}`。宿主会把模块导航转换到 Vue 路由下，不需要在模块里硬编码 `/ui`。
+
+```csharp
+public IEnumerable<ModuleNavItem> GetNavItems(ModuleHostContext context)
+{
+    yield return new ModuleNavItem
+    {
+        Title = "模块设置",
+        Href = "/ext/my-module/settings",
+        Group = "扩展模块",
+        Order = 100
+    };
+}
+```
+
+如果宿主已经为某个模块写了固定 Vue 页面，模块也可以不返回导航项，由宿主菜单直接提供入口。
+
 ## 开发/调试建议
 
 模块开发最简单的闭环是：**打包 → 在面板中上传/安装 → 重启服务 → 验证**。
@@ -911,6 +978,8 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 > 内置 kick 接口提供了一个参考实现：`src/TelegramPanel.Web/ExternalApi/KickApi.cs`
 
 ## UI 扩展（页面/导航）
+
+> 后台已经是 Vue SPA。旧 Razor 页面仍然支持，但如果该模块已有宿主 Vue 原生页，必须同步提供 `/api/panel/extensions/{slug}` 管理接口。完整约定见上面的“Vue 后台迁移后的模块页面约定”。
 
 ### 1) 添加导航链接（可选）
 
