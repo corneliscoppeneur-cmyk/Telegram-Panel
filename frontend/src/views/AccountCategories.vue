@@ -43,7 +43,7 @@
                 <el-tag
                   effect="plain"
                   class="category-name-tag"
-                  :style="{ color: categoryColor(row), borderColor: categoryColor(row) }"
+                  :style="accountCategoryTextStyle(row)"
                 >
                   {{ row.name }}
                 </el-tag>
@@ -51,7 +51,7 @@
             </el-table-column>
             <el-table-column label="颜色" width="90">
               <template #default="{ row }">
-                <span class="text-color-sample" :style="{ color: categoryColor(row), borderColor: categoryColor(row) }">A</span>
+                <span class="text-color-sample" :style="accountCategoryTextStyle(row)">A</span>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="180">
@@ -254,8 +254,16 @@ function openEdit(category: AccountCategory) {
   editDialog.visible = true
 }
 
-function categoryColor(category: AccountCategory) {
-  return category.color || '#9E9E9E'
+function accountCategoryTextStyle(category: AccountCategory) {
+  const color = category.color || '#9E9E9E'
+  return {
+    color,
+    borderColor: color,
+    backgroundColor: 'transparent',
+    '--el-tag-text-color': color,
+    '--el-tag-border-color': color,
+    '--el-tag-bg-color': 'transparent',
+  }
 }
 
 async function saveEdit() {

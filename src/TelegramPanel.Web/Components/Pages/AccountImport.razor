@@ -242,7 +242,7 @@
                     <MudTd DataLabel="分类">
                         @if (context.Category != null)
                         {
-                            <MudChip T="string" Size="Size.Small" Style="@($"background-color: {context.Category.Color ?? "#9E9E9E"}")">
+                            <MudChip T="string" Size="Size.Small" Style="@($"color: {context.Category.Color ?? "#9E9E9E"}; border: 1px solid {context.Category.Color ?? "#9E9E9E"}; background-color: transparent;")">
                                 @context.Category.Name
                             </MudChip>
                         }

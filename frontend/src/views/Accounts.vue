@@ -95,7 +95,7 @@
         <el-table-column prop="userId" label="用户ID" min-width="120" />
         <el-table-column label="分类" min-width="130">
           <template #default="{ row }">
-            <el-tag v-if="row.category" :color="row.category.color || undefined" effect="plain">
+            <el-tag v-if="row.category" class="account-category-tag" effect="plain" :style="accountCategoryTagStyle(row.category)">
               {{ row.category.name }}
             </el-tag>
             <span v-else>未分类</span>
@@ -626,6 +626,18 @@ const selectionIcon = computed<Component>(() => {
   if (selectionMode.value === 'clear') return Delete
   return Select
 })
+
+function accountCategoryTagStyle(category: AccountCategory) {
+  const color = category.color || '#9E9E9E'
+  return {
+    color,
+    borderColor: color,
+    backgroundColor: 'transparent',
+    '--el-tag-text-color': color,
+    '--el-tag-border-color': color,
+    '--el-tag-bg-color': 'transparent',
+  }
+}
 
 const details = reactive({
   visible: false,
@@ -1586,6 +1598,10 @@ onMounted(async () => {
 
 .accounts-table {
   width: 100%;
+}
+
+.account-category-tag {
+  background: transparent;
 }
 
 .row-actions {
