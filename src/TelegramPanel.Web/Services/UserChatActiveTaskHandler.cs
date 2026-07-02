@@ -27,11 +27,15 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         var accountManagement = host.Services.GetRequiredService<AccountManagementService>();
         var accountTools = host.Services.GetRequiredService<AccountTelegramToolsService>();
         var templateRendering = host.Services.GetRequiredService<TemplateRenderingService>();
+        var assetStorage = host.Services.GetRequiredService<ImageAssetStorageService>();
         var aiVerification = host.Services.GetRequiredService<UserChatActiveAiVerificationService>();
         var aiOptions = host.Services.GetRequiredService<IOptionsMonitor<AiOpenAiOptions>>();
 
         var config = DeserializeConfig(host.Config);
         ValidateAndNormalizeConfig(config);
+        if (!string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
+            await templateRendering.ValidateImageTemplateAsync(config.ImageDictionaryToken, cancellationToken);
+
         config.Canceled = false;
         config.Error = null;
         var configGate = new SemaphoreSlim(1, 1);
@@ -204,7 +208,10 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     continue;
                 }
 
-                if (text.Length == 0)
+                var imageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
+                var hasImageDictionary = imageDictionaryToken.Length > 0;
+
+                if (text.Length == 0 && !hasImageDictionary)
                 {
                     var completed = Interlocked.Increment(ref progress.Completed);
                     Interlocked.Increment(ref progress.Failed);
@@ -238,11 +245,34 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     continue;
                 }
 
-                var send = await accountTools.SendMessageToResolvedChatAsync(
-                    accountSlot.Account.Id,
-                    targetSlot.Resolved,
-                    text,
-                    cancellationToken: cancellationToken);
+                (bool Success, string? Error, int? MessageId) send;
+                if (hasImageDictionary)
+                {
+                    try
+                    {
+                        var asset = await templateRendering.ResolveImageTemplateAsync(imageDictionaryToken, cancellationToken);
+                        await using var image = await assetStorage.OpenReadAsync(asset.AssetPath, cancellationToken);
+                        send = await accountTools.SendPhotoToResolvedChatAsync(
+                            accountSlot.Account.Id,
+                            targetSlot.Resolved,
+                            image,
+                            asset.FileName,
+                            text,
+                            cancellationToken: cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        send = (false, $"图片字典解析/发送准备失败：{ex.Message}", null);
+                    }
+                }
+                else
+                {
+                    send = await accountTools.SendMessageToResolvedChatAsync(
+                        accountSlot.Account.Id,
+                        targetSlot.Resolved,
+                        text,
+                        cancellationToken: cancellationToken);
+                }
 
                 var sendCompleted = Interlocked.Increment(ref progress.Completed);
                 var hadFailureThisRound = false;
@@ -426,12 +456,18 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             .Select(x => (x ?? string.Empty).Trim())
             .Where(x => x.Length > 0)
             .ToList();
+        config.ImageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
+        if (config.ImageDictionaryToken.Length == 0)
+            config.ImageDictionaryToken = null;
 
         if (config.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道");
 
+        if (config.Dictionary.Count == 0 && string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
+            throw new InvalidOperationException("任务缺少词典消息或图片字典");
+
         if (config.Dictionary.Count == 0)
-            throw new InvalidOperationException("任务缺少词典消息");
+            config.Dictionary.Add(string.Empty);
 
         if (config.DelayMinMs < 0) config.DelayMinMs = 0;
         if (config.DelayMaxMs < 0) config.DelayMaxMs = 0;

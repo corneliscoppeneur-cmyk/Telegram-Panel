@@ -44,11 +44,25 @@
                       HelperText="支持：用户名（可带 at 前缀）、https://t.me/xxx、频道ID（如 -1001234567890 或 1234567890），如私密群组无法复制链接可登录 Telegram Web 面板打开群组聊天界面查看链接，数字就是 ID" />
 
         <MudTextField @bind-Value="dictionaryText" @bind-Value:after="OnInputsChanged"
-                      Label="词典（每行一个）"
+                      Label="文字词典（每行一个）"
                       Variant="Variant.Outlined"
                       Lines="6"
                       Immediate="true"
-                      HelperText="支持 {time} 和文本字典变量。任务会先按“随机 / 队列”模式选中一行，再解析变量后发送。" />
+                      HelperText="支持 {time} 和文本字典变量。选择图片字典后，这里的解析结果会作为图片说明文字发送。" />
+
+        <MudSelect T="string"
+                   @bind-Value="selectedImageDictionaryName"
+                   @bind-Value:after="OnInputsChanged"
+                   Label="图片字典（可选）"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   HelperText="选择后每轮会从该图片字典取一张图发送，文字词典作为 caption。">
+            <MudSelectItem Value="@string.Empty">不发送图片</MudSelectItem>
+            @foreach (var name in imageDictionaryNames)
+            {
+                <MudSelectItem Value="@name">@name</MudSelectItem>
+            }
+        </MudSelect>
 
         @if (textDictionaryNames.Count > 0)
         {
@@ -212,6 +226,7 @@
 
     private List<AccountCategory> categories = new();
     private List<string> textDictionaryNames = new();
+    private List<string> imageDictionaryNames = new();
     private List<string> selectableAiModels = new();
     private bool loading = true;
     private bool initializedFromConfig;
@@ -219,6 +234,7 @@
     private IEnumerable<int> selectedCategoryIds = Array.Empty<int>();
     private string targetsText = string.Empty;
     private string dictionaryText = string.Empty;
+    private string selectedImageDictionaryName = string.Empty;
     private decimal delayMinSeconds = 15m;
     private decimal delayMaxSeconds = 45m;
     private int maxMessages;
@@ -262,6 +278,13 @@
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            imageDictionaryNames = (await DictionaryService.GetAllAsync())
+                .Where(x => x.IsEnabled && string.Equals(x.Type, DataDictionaryTypes.Image, StringComparison.OrdinalIgnoreCase))
+                .Where(x => x.Items.Any(i => i.IsEnabled && !string.IsNullOrWhiteSpace(i.AssetPath)))
+                .Select(x => x.Name)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             LoadAiSettings();
         }
         finally
@@ -292,6 +315,7 @@
             selectedCategoryIds = NormalizeCategoryIds(cfg.CategoryIds, cfg.CategoryId);
             targetsText = string.Join(Environment.NewLine, cfg.Targets ?? new List<string>());
             dictionaryText = string.Join(Environment.NewLine, cfg.Dictionary ?? new List<string>());
+            selectedImageDictionaryName = ExtractDictionaryName(cfg.ImageDictionaryToken);
             delayMinSeconds = ConvertMillisecondsToSeconds(cfg.DelayMinMs);
             delayMaxSeconds = ConvertMillisecondsToSeconds(cfg.DelayMaxMs);
             maxMessages = cfg.MaxMessages;
@@ -404,9 +428,13 @@
             return;
         }
 
-        if (dictionary.Count == 0)
+        var imageDictionaryToken = string.IsNullOrWhiteSpace(selectedImageDictionaryName)
+            ? null
+            : $"{{{selectedImageDictionaryName.Trim().Trim('{', '}')}}}";
+
+        if (dictionary.Count == 0 && string.IsNullOrWhiteSpace(imageDictionaryToken))
         {
-            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "请至少填写一条词典消息"));
+            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "请至少填写一条文字词典或选择图片字典"));
             return;
         }
 
@@ -498,6 +526,19 @@
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(imageDictionaryToken))
+        {
+            try
+            {
+                await TemplateRendering.ValidateImageTemplateAsync(imageDictionaryToken);
+            }
+            catch (Exception ex)
+            {
+                await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"图片字典无效：{ex.Message}"));
+                return;
+            }
+        }
+
         var categoryNames = selectedCategories.Select(x => x.Name).ToList();
         var cfg = new UserChatActiveTaskConfig
         {
@@ -507,6 +548,7 @@
             CategoryNames = categoryNames,
             Targets = targets,
             Dictionary = dictionary,
+            ImageDictionaryToken = imageDictionaryToken,
             DelayMinMs = ConvertSecondsToMilliseconds(delayMinSeconds),
             DelayMaxMs = ConvertSecondsToMilliseconds(delayMaxSeconds),
             MaxMessages = maxMessages,
@@ -569,6 +611,14 @@
         return string.Equals(value, UserChatActiveTaskModes.Queue, StringComparison.OrdinalIgnoreCase)
             ? UserChatActiveTaskModes.Queue
             : UserChatActiveTaskModes.Random;
+    }
+
+    private static string ExtractDictionaryName(string? token)
+    {
+        var text = (token ?? string.Empty).Trim();
+        return text.StartsWith('{') && text.EndsWith('}') && text.Length > 2
+            ? text[1..^1].Trim()
+            : string.Empty;
     }
 
     private static List<string> ParseTargetLines(string? text)

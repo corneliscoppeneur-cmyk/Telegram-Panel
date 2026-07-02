@@ -46,6 +46,9 @@ public sealed class UserChatActiveTaskConfig
     [JsonPropertyName("dictionary")]
     public List<string> Dictionary { get; set; } = new();
 
+    [JsonPropertyName("image_dictionary_token")]
+    public string? ImageDictionaryToken { get; set; }
+
     [JsonPropertyName("delay_min_ms")]
     public int DelayMinMs { get; set; } = 15000;
 

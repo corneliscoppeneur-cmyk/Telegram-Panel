@@ -18,9 +18,16 @@
         <el-input v-model="forms.userChatActive.targetsText" type="textarea" :rows="5" placeholder="每行一个群组/频道链接、用户名或 ID" />
       </el-form-item>
       <el-form-item label="词典">
-        <el-input v-model="forms.userChatActive.dictionaryText" type="textarea" :rows="6" placeholder="每行一条消息，支持 {time} 和文本字典变量" />
+        <el-input v-model="forms.userChatActive.dictionaryText" type="textarea" :rows="6" placeholder="每行一条文字消息，支持 {time} 和文本字典变量" />
       </el-form-item>
       <div class="form-hint">可用文本变量：{{ textVariableHint }}</div>
+      <el-form-item label="图片字典">
+        <el-select v-model="forms.userChatActive.imageDictionaryName" class="full" placeholder="不发送图片">
+          <el-option label="不发送图片" value="" />
+          <el-option v-for="name in imageDictionaryNames" :key="name" :label="name" :value="name" />
+        </el-select>
+      </el-form-item>
+      <div class="form-hint">选择后每轮发送一张图片，文字词典会作为图片说明文字。</div>
 
       <el-row :gutter="12">
         <el-col :span="8">
@@ -472,6 +479,7 @@ function applyInitialConfig() {
     form.categoryIds = normalizeIds(cfg.category_ids, readNumber(cfg.category_id))
     form.targetsText = readStringArray(cfg.targets).join('\n')
     form.dictionaryText = readStringArray(cfg.dictionary).join('\n')
+    form.imageDictionaryName = extractDictionaryName(readString(cfg.image_dictionary_token))
     form.delayMinSeconds = millisecondsToSeconds(readNumber(cfg.delay_min_ms, 15000))
     form.delayMaxSeconds = millisecondsToSeconds(readNumber(cfg.delay_max_ms, 45000))
     form.maxMessages = readNumber(cfg.max_messages, 0)
@@ -577,7 +585,8 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
   const dictionary = parseLines(form.dictionaryText)
   if (categoryIds.length === 0 || selectedCategories.length === 0) throw new Error('请至少选择一个执行账号分类')
   if (targets.length === 0) throw new Error('请至少填写一个目标群组/频道')
-  if (dictionary.length === 0) throw new Error('请至少填写一条词典消息')
+  if (form.imageDictionaryName && !imageDictionaryNames.value.includes(form.imageDictionaryName)) throw new Error('请选择有效的图片字典')
+  if (dictionary.length === 0 && !form.imageDictionaryName) throw new Error('请至少填写一条文字词典或选择图片字典')
   if (form.delayMaxSeconds < form.delayMinSeconds) throw new Error('最大间隔不能小于最小间隔')
   if (!isValidMode(form.accountMode) || !isValidMode(form.targetMode) || !isValidMode(form.messageMode)) throw new Error('模式参数无效')
 
@@ -609,6 +618,7 @@ function buildUserChatActiveDraft(): TaskConfigDraft {
     category_names: selectedCategories.map((x) => x.name),
     targets,
     dictionary,
+    image_dictionary_token: form.imageDictionaryName ? dictionaryToken(form.imageDictionaryName) : null,
     delay_min_ms: secondsToMilliseconds(form.delayMinSeconds),
     delay_max_ms: secondsToMilliseconds(form.delayMaxSeconds),
     account_mode: form.accountMode,
@@ -824,6 +834,7 @@ function defaultUserChatActiveForm() {
     categoryIds: [] as number[],
     targetsText: '',
     dictionaryText: '',
+    imageDictionaryName: '',
     delayMinSeconds: 15,
     delayMaxSeconds: 45,
     maxMessages: 0,
