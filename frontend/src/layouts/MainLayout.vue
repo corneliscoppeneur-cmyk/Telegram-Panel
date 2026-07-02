@@ -207,26 +207,30 @@ import { formatTime } from '@/utils/format'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowDown,
+  Avatar,
+  Box,
+  ChatDotRound,
   CollectionTag,
-  Connection,
-  DocumentAdd,
-  Folder,
+  DataBoard,
+  FolderOpened,
   Grid,
   Link,
   List,
+  Management,
   Menu,
   Moon,
-  Notebook,
-  Odometer,
   Plus,
   Promotion,
+  Reading,
+  Right,
   Setting,
   Sunny,
   SwitchButton,
   Tickets,
   Tools,
-  Upload,
+  UploadFilled,
   User,
+  UserFilled,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 
@@ -239,7 +243,7 @@ const isMobile = ref(window.innerWidth < 780)
 const moduleNavItems = ref<ModuleNavItem[]>([])
 const versionInfo = ref<VersionInfo | null>(null)
 const version = computed(() => versionInfo.value?.currentVersion || auth.me?.version || '')
-const isDark = ref(true)
+const isDark = ref(false)
 const versionDialog = ref({
   visible: false,
   loading: false,
@@ -251,7 +255,7 @@ const pageTitle = computed(() => (route.meta.title as string) || '')
 const activeIndex = computed(() => (route.path === '/dictionaries' ? '/data-dictionaries' : route.path))
 const isEmbedMode = computed(() => route.query.embed === '1')
 const defaultOpeneds = ['accounts-group', 'channels-group', 'groups-group', 'bots-group', 'extensions-group']
-const menuTextColor = computed(() => (isDark.value ? '#c6cad4' : '#374151'))
+const menuTextColor = computed(() => (isDark.value ? '#c6cad4' : '#3f4b5b'))
 const menuActiveTextColor = computed(() => (isDark.value ? '#90caf9' : '#1976d2'))
 const canApplyVersionUpdate = computed(() =>
   versionInfo.value?.success === true
@@ -268,15 +272,15 @@ interface MenuItem {
 }
 
 const staticMenuItems: MenuItem[] = [
-  { index: '/dashboard', label: '仪表盘', icon: Odometer },
+  { index: '/dashboard', label: '仪表盘', icon: DataBoard },
   {
     index: 'accounts-group',
     label: '账号管理',
-    icon: User,
+    icon: Avatar,
     children: [
-      { index: '/accounts', label: '账号列表', icon: User },
-      { index: '/accounts/import', label: '导入账号', icon: Upload },
-      { index: '/accounts/login', label: '手机号登录', icon: SwitchButton },
+      { index: '/accounts', label: '账号列表', icon: UserFilled },
+      { index: '/accounts/import', label: '导入账号', icon: UploadFilled },
+      { index: '/accounts/login', label: '手机号登录', icon: Right },
       { index: '/accounts/categories', label: '账号分类', icon: CollectionTag },
     ],
   },
@@ -287,31 +291,31 @@ const staticMenuItems: MenuItem[] = [
     children: [
       { index: '/channels', label: '频道列表', icon: List },
       { index: '/channels/create', label: '创建频道', icon: Plus },
-      { index: '/channels/groups', label: '频道分类', icon: Folder },
+      { index: '/channels/groups', label: '频道分类', icon: FolderOpened },
     ],
   },
   {
     index: 'groups-group',
     label: '群组管理',
-    icon: Connection,
+    icon: User,
     children: [
       { index: '/groups', label: '群组列表', icon: List },
       { index: '/groups/create', label: '创建群组', icon: Plus },
-      { index: '/groups/categories', label: '群组分类', icon: Folder },
+      { index: '/groups/categories', label: '群组分类', icon: FolderOpened },
     ],
   },
   {
     index: 'bots-group',
     label: '机器人管理',
-    icon: Connection,
+    icon: Management,
     children: [
-      { index: '/bots', label: '机器人列表', icon: Connection },
-      { index: '/bots/channels', label: 'Bot 频道', icon: List },
+      { index: '/bots', label: '机器人列表', icon: Management },
+      { index: '/bots/channels', label: 'Bot 频道', icon: ChatDotRound },
     ],
   },
   { index: '/tasks', label: '任务中心', icon: Tickets },
-  { index: '/data-dictionaries', label: '数据字典', icon: Notebook },
-  { index: '/modules', label: '模块管理', icon: DocumentAdd },
+  { index: '/data-dictionaries', label: '数据字典', icon: Reading },
+  { index: '/modules', label: '模块管理', icon: Box },
   { index: '/apis', label: 'API 管理', icon: Link },
   { index: '/settings', label: '系统设置', icon: Tools },
   { index: 'logout', label: '退出登录', icon: SwitchButton },
@@ -432,7 +436,7 @@ function openGithub() {
 }
 
 function loadStoredTheme() {
-  return localStorage.getItem('telegram-panel-theme') !== 'light'
+  return localStorage.getItem('telegram-panel-theme') === 'dark'
 }
 
 function applyTheme(dark: boolean) {
