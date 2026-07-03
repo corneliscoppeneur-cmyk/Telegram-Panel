@@ -2,11 +2,11 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-基于 **WTelegramClient** 的 Telegram 多账户管理面板，使用 **.NET 8** 与 **Blazor Server** 构建。
+基于 **WTelegramClient** 的 Telegram 多账户管理面板，使用 **.NET 8 后端** 与 **Vue 3 管理后台** 构建。
 
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET 8.0">
-  <img src="https://img.shields.io/badge/Blazor-Server-512BD4?style=for-the-badge&logo=blazor&logoColor=white" alt="Blazor Server">
+  <img src="https://img.shields.io/badge/Vue-3-42B883?style=for-the-badge&logo=vuedotjs&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Compose">
   <img src="https://img.shields.io/badge/Powered%20by-WTelegramClient-333333?style=for-the-badge" alt="Powered by WTelegramClient">
 </p>
@@ -31,7 +31,18 @@ Telegram Panel 用于在单个 Web 面板中统一管理和运营多个 Telegram
 - 🧹 **废号检测与一键清理**：对封禁、受限、冻结、未登录、Session 失效等状态进行批量处理
 - 🔐 **2FA 管理**：支持单个 / 批量修改二级密码，绑定 / 换绑找回邮箱（支持对接 Cloud Mail 自动收码确认）
 - 👤 **账号可见性增强**：可在账号列表一键查看已加入的频道和群组，并展示注册时间（基于 777000 系统通知的估算值，非百分百准确）
-- 🧩 **模块化扩展**：任务 / API / UI 可安装扩展模块（见 `docs/developer/modules.md`）
+- 🧩 **模块化扩展**：任务 / API 可安装扩展模块，支持 Vue 后台管理接口与旧 Razor 模块页面兼容（见 `docs/developer/modules.md`）
+
+## 前端架构说明
+
+主后台已经迁移为 Vue SPA，入口在 `/ui`。`.NET` 后端继续负责 API、后台任务、模块加载、旧 Razor 模块页面与兼容路由。
+
+模块开发需要按下面的边界处理：
+
+- 新模块优先提供 `/api/panel/extensions/{module-slug}` 管理接口，由 Vue 后台页面消费数据。
+- 已有的 Razor 模块页面仍可通过 `IModuleUiProvider.GetPages` 注册，并由 `/ext/{moduleId}/{pageKey}` 兼容入口加载。
+- 如果某个模块已经由宿主提供 Vue 原生页面，模块必须同步提供对应的管理接口，否则页面会出现接口 `404` 或回退到旧页面。
+- 面向客户的公开分享页不要做成后台模块页，应通过 `MapEndpoints` 单独暴露匿名 token 页面或 API，并自行处理过期、权限隔离、防缓存和限流。
 
 ## 近期新增功能
 
@@ -103,6 +114,15 @@ docker compose up -d
 ```
 
 访问：`http://localhost:5000`
+
+如果宿主机 `5000` 端口被其它服务占用，建议只改宿主机端口，容器内仍保持 `5000`：
+
+```yaml
+ports:
+  - "18080:5000"
+```
+
+然后访问：`http://localhost:18080`
 
 #### 默认后台账号（首次登录）
 

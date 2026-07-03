@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-A **WTelegramClient**-based multi-account Telegram management panel built with **.NET 8** and **Blazor Server**.
+A **WTelegramClient**-based multi-account Telegram management panel built with a **.NET 8** backend and a **Vue 3** management UI.
 
 ## Introduction
 
@@ -16,7 +16,17 @@ Telegram Panel is a unified web panel for managing and operating multiple Telegr
 - 🧹 **Dead Account Detection & Cleanup**: Batch process banned, restricted, frozen, inactive, and session-expired accounts
 - 🔐 **2FA Management**: Support single/batch password change, bind/rebind recovery email
 - 👤 **Account Visibility Enhancement**: View joined channels/groups with estimated registration time
-- 🧩 **Module Extension**: Task / API / UI installable extension modules (see docs/developer/modules.md)
+- 🧩 **Module Extension**: Installable task / API modules, Vue management APIs, and legacy Razor module page compatibility (see docs/developer/modules.md)
+
+## Frontend Architecture
+
+The main management UI is now a Vue SPA served under `/ui`. The .NET backend still hosts the API, background tasks, module loader, legacy Razor module pages, and compatibility routes.
+
+For module authors:
+
+- New modules should expose management data through `/api/panel/extensions/{module-slug}` and let the Vue UI consume those APIs.
+- Existing Razor module pages registered through `IModuleUiProvider.GetPages` still work through `/ext/{moduleId}/{pageKey}` and are loaded by the Vue shell when no native Vue page exists.
+- Public customer-facing links should be implemented as explicit module endpoints with their own token, expiry, cache, and rate-limit rules, not as admin module pages.
 
 ## Quick Start
 
@@ -33,6 +43,15 @@ docker compose up -d
 ```````
 
 Access: http://localhost:5000
+
+If port `5000` conflicts with another service, keep the container port as `5000` and map a higher host port instead:
+
+```````yaml
+ports:
+  - "18080:5000"
+```````
+
+Then access: http://localhost:18080
 
 Default credentials: admin / admin123
 

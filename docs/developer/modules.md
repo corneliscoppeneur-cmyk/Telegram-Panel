@@ -1,6 +1,6 @@
 ﻿# 模块系统（可安装/可卸载）
 
-本项目提供一个“模块系统”框架，用于把**任务能力**与**外部 API 能力**以模块形式分发、安装、启用与回滚，避免因为扩展功能不兼容导致主站不可用。
+本项目提供一个“模块系统”框架，用于把**任务能力**、**外部 API 能力**与**后台管理能力**以模块形式分发、安装、启用与回滚，避免因为扩展功能不兼容导致主站不可用。
 
 > 当前实现为**同进程插件**（动态加载程序集）。为稳定起见：安装/启用/停用/卸载后通常需要**重启服务**才能生效。
 
@@ -11,6 +11,7 @@
 - 依赖管理：模块声明依赖的模块与版本范围（`>=1.2.3 <2.0.0`）
 - 兼容性：模块声明宿主版本区间（`host.min/host.max`）
 - 失败自动兜底：模块加载失败时自动尝试回滚到 `LastGoodVersion`，否则自动禁用以避免拖垮系统
+- Vue 后台适配：新模块优先提供管理端 API，由宿主 Vue 后台承载页面；旧 Razor 页面继续保留兼容入口
 
 ## 面板入口
 
@@ -39,7 +40,7 @@
 - `IModuleTaskHandler`：实现任务中心后台执行器（让后台真正能跑该任务）
 - `IModuleTaskRerunBuilder`：为“重新运行”提供专用的配置重建逻辑（适合需要清洗旧配置的任务）
 - `IModuleApiProvider`：声明模块提供的外部 API 类型（让 API 管理页面可动态创建配置项）
-- `IModuleUiProvider`：声明模块扩展 UI 导航与页面（让面板可挂载模块自定义页面）
+- `IModuleUiProvider`：声明模块扩展导航与旧 Razor 页面（Vue 后台会通过兼容入口挂载）
 
 > 说明：模块启用/停用通常需要重启；宿主启动时只会加载“启用”的模块，因此 UI/任务/API 列表会随启用状态变化。
 
@@ -205,16 +206,18 @@ if (availableChannels.Count == 0)
 
 注意：宿主会为 `getUpdates` / `setWebhook` 固定传入 `allowed_updates` 白名单（见 `src/TelegramPanel.Core/Services/Telegram/BotUpdateHub.cs` 的 `AllowedUpdatesJson`）。当前已包含成员变更与入群请求：`chat_member`、`chat_join_request`；后续如你的模块需要其它更新类型，需要先在宿主侧扩展该白名单并发布宿主版本。
 
-## 配置入口与“窗口编辑”（推荐）
+## 配置入口与“窗口编辑”
 
-如果你的模块需要“配置界面”，推荐以 **模块页面**（`IModuleUiProvider.GetPages`）的形式提供，然后在 `ModuleTaskDefinition.CreateRoute` 中指向该页面的路由：
+如果你的模块需要配置界面，优先按 Vue 后台的方式设计：模块在 `MapEndpoints` 中提供管理端 API，宿主 Vue 页面负责展示和编辑。
+
+对还没有 Vue 原生页面的旧模块，可以继续用 **Razor 模块页面**（`IModuleUiProvider.GetPages`）作为兼容配置入口，然后在 `ModuleTaskDefinition.CreateRoute` 中指向该页面的路由：
 
 - 模块页面路由固定为：`/ext/{ModuleId}/{PageKey}`
 - 当 `CreateRoute` 指向 `/ext/...` 时：
   - “新建任务”弹窗会提供“打开窗口/前往页面”两种方式
   - “任务中心”会在顶部的“持续任务（可配置）”区域展示该任务，并提供“编辑”按钮直接打开配置窗口
 
-这样可以获得类似“配置窗口”的体验，同时仍复用模块页面渲染能力（`DynamicComponent`）。
+这样可以获得类似“配置窗口”的体验，同时仍复用旧模块页面渲染能力。Vue 后台会把这类入口放进兼容窗口或兼容页面中加载。
 
 > 提醒：保存配置应尽量做到“立即生效”；只有模块启用/停用（影响 DI/后台服务装载）才需要重启。
 
@@ -569,9 +572,11 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 
 否则会出现“包结构看似正常，但 Telegram Desktop 仍要求重新登录”。
 
-## UI 模块项目模板（Razor 组件）
+## 旧版 UI 模块项目模板（Razor 组件，兼容模式）
 
-如果你的模块需要提供页面（`IModuleUiProvider.GetPages`），推荐把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
+主后台已经迁移到 Vue。新模块不建议再把复杂管理界面写成 Razor 组件；推荐模块提供 `/api/panel/extensions/{module-slug}` 管理接口，由宿主 Vue 页面承载操作界面。
+
+如果你的模块已经有旧页面，或暂时没有对应的 Vue 原生页面，仍可以通过 `IModuleUiProvider.GetPages` 提供兼容 Razor 页面。此时可以把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk.Razor">
@@ -587,16 +592,18 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 </Project>
 ```
 
-建议在模块根目录放一个 `_Imports.razor`，把常用命名空间一次性导入（例如 `MudBlazor`、`Microsoft.AspNetCore.Components` 等），避免每个页面重复写。
+旧 Razor 页面建议在模块根目录放一个 `_Imports.razor`，把常用命名空间一次性导入（例如 `MudBlazor`、`Microsoft.AspNetCore.Components` 等），避免每个页面重复写。
 
-> 注意：模块项目引用 `MudBlazor` 主要用于编译期；运行时会跟随宿主加载。若模块需要自带静态资源（CSS/JS），宿主不会自动暴露模块的 `wwwroot`，你需要在 `MapEndpoints` 中自行提供静态文件访问（或把样式/脚本内联到页面里）。
+> 注意：模块项目引用 `MudBlazor` 主要用于旧页面编译期；运行时会跟随宿主加载。若模块需要自带静态资源（CSS/JS），宿主不会自动暴露模块的 `wwwroot`，你需要在 `MapEndpoints` 中自行提供静态文件访问（或把样式/脚本内联到页面里）。
 
 ## Vue 后台迁移后的模块页面约定
 
 后台管理界面已经迁移到 Vue SPA，入口在 `/ui` 下。模块开发时需要区分两种页面形态：
 
-1. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}`。
-2. **宿主 Vue 原生页面**：页面代码在宿主 `frontend/src/views/extensions/`，数据由模块提供 `/api/panel/extensions/{slug}` 管理接口。
+1. **宿主 Vue 原生页面**：页面代码在宿主 `frontend/src/views/extensions/`，数据由模块提供 `/api/panel/extensions/{slug}` 管理接口。
+2. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}` 作为兼容入口。
+
+新模块默认按第一种方式设计。也就是说，模块负责能力、配置、运行态数据和保存接口，宿主 Vue 后台负责页面呈现。只有旧模块、简单页面或暂时没有 Vue 原生页面时，才继续使用 Razor 兼容页面。
 
 如果模块没有被宿主 Vue 页面接管，不需要为了 Vue 迁移重写模块。宿主的通用 Vue 页面会用 iframe 加载旧模块页面：
 
@@ -636,6 +643,7 @@ public void MapEndpoints(IEndpointRouteBuilder endpoints, ModuleHostContext cont
 - 这个前缀只用于后台管理接口，不要放匿名外链或公开 API。
 - 返回 DTO，不要直接返回 EF 实体或内部运行态对象。
 - Vue 页面需要的列表、设置、运行态快照，优先通过一个 `GET ""` 聚合返回，避免页面首次加载打很多请求。
+- 写接口时要把“读取初始数据”和“保存配置”分清楚，避免页面刷新时触发耗时 Telegram 操作。
 - 修改接口后必须递增 `manifest.json` 的 `version`，重新打包 `.tpm` 并更新生产模块包。
 - 新接口上线前保留旧 Razor 页面，便于回退和排障。
 
@@ -977,15 +985,27 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 
 > 内置 kick 接口提供了一个参考实现：`src/TelegramPanel.Web/ExternalApi/KickApi.cs`
 
-## UI 扩展（页面/导航）
+## UI 扩展（Vue 后台与旧页面兼容）
 
-> 后台已经是 Vue SPA。旧 Razor 页面仍然支持，但如果该模块已有宿主 Vue 原生页，必须同步提供 `/api/panel/extensions/{slug}` 管理接口。完整约定见上面的“Vue 后台迁移后的模块页面约定”。
+> 后台已经是 Vue SPA。新模块优先提供管理端 API，由宿主 Vue 页面承载。旧 Razor 页面仍然支持，但只作为兼容方案；如果该模块已有宿主 Vue 原生页，必须同步提供 `/api/panel/extensions/{slug}` 管理接口。完整约定见上面的“Vue 后台迁移后的模块页面约定”。
 
 ### 1) 添加导航链接（可选）
 
 实现 `IModuleUiProvider.GetNavItems` 返回 `ModuleNavItem`（Title/Href/Icon/Group/Order）。
 
-### 2) 添加模块页面（推荐）
+导航可以继续写 `/ext/{moduleId}/{pageKey}`，宿主会在 Vue 后台里转换成兼容路由。模块里不要硬编码 `/ui`。
+
+### 2) 提供 Vue 管理接口（新模块推荐）
+
+新模块如果需要管理界面，推荐先提供管理端 API：
+
+```text
+/api/panel/extensions/{module-slug}
+```
+
+然后由宿主 Vue 页面读取这些接口。这样页面刷新、侧栏切换、弹窗编辑都不依赖 Blazor Server 连接，也更容易保持和主后台一致的 UI。
+
+### 3) 添加旧 Razor 模块页面（兼容）
 
 实现 `IModuleUiProvider.GetPages` 返回 `ModulePageDefinition`：
 
@@ -994,7 +1014,7 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 
 宿主提供统一入口路由：`/ext/{moduleId}/{pageKey}`，会动态加载并渲染模块组件。
 
-### 3) 模块页面参数约定（非常重要）
+### 4) 模块页面参数约定（非常重要）
 
 宿主会把 `ModuleId` 与 `PageKey` 作为组件参数注入，因此模块页面组件必须声明以下两个参数，否则运行时会 500（组件不接受宿主注入的参数）：
 
@@ -1020,13 +1040,16 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 ## 认证/授权（端点安全）
 
 - **模块页面**：作为面板的一部分渲染，通常受宿主的后台登录控制（管理员登录开启时会要求授权）。
+- **Vue 管理接口**（`/api/panel/extensions/{slug}`）：属于后台管理接口，通常应跟随宿主后台登录鉴权。
 - **模块 API 端点**（`MapEndpoints`）：请显式选择：
   - `AllowAnonymous()`：公开接口（务必自行做好鉴权/限流/防泄露）
   - 或 `RequireAuthorization()`：跟随宿主后台登录鉴权
 
 如果是“外置链接/匿名链接”类能力，建议：
 
+- 不要放在 `/ext/...` 后台模块页面，也不要放在 `/api/panel/extensions/...` 管理接口下面
 - 使用随机 token 作为访问凭证
+- 设置过期时间，并按账号/客户隔离可见范围
 - 做好限流（按 token + IP）
 - 返回 `no-store` 防缓存
 
