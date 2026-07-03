@@ -44,9 +44,24 @@ public class BatchTaskManagementService
         return await _batchTaskRepository.GetRunningTasksAsync();
     }
 
+    public async Task<IReadOnlyList<BatchTask>> GetActiveTasksAsync(CancellationToken cancellationToken = default)
+    {
+        return await _batchTaskRepository.GetActiveTasksAsync(cancellationToken);
+    }
+
     public async Task<IEnumerable<BatchTask>> GetRecentTasksAsync(int count = 20)
     {
         return await _batchTaskRepository.GetRecentTasksAsync(count);
+    }
+
+    public async Task<IReadOnlyList<BatchTask>> GetTaskCenterItemsAsync(int historyCount = 100, CancellationToken cancellationToken = default)
+    {
+        return await _batchTaskRepository.GetTaskCenterItemsAsync(historyCount, cancellationToken);
+    }
+
+    public async Task<int> CountActiveTasksAsync(CancellationToken cancellationToken = default)
+    {
+        return await _batchTaskRepository.CountActiveTasksAsync(cancellationToken);
     }
 
     public async Task<int> TrimHistoryTasksAsync(int keepCount, CancellationToken cancellationToken = default)
@@ -132,6 +147,28 @@ public class BatchTaskManagementService
             task.CompletedAt = null;
             await _batchTaskRepository.UpdateFreshAsync(task);
         }
+    }
+
+    public async Task<int> RequeueRunningTasksAsync(Func<BatchTask, bool>? predicate = null)
+    {
+        var runningTasks = (await _batchTaskRepository.GetByStatusAsync("running")).ToList();
+        if (runningTasks.Count == 0)
+            return 0;
+
+        var requeued = 0;
+        foreach (var task in runningTasks)
+        {
+            if (predicate != null && !predicate(task))
+                continue;
+
+            task.Status = "pending";
+            task.StartedAt = null;
+            task.CompletedAt = null;
+            await _batchTaskRepository.UpdateFreshAsync(task);
+            requeued++;
+        }
+
+        return requeued;
     }
 
     public async Task CompleteTaskAsync(int taskId, bool success = true)

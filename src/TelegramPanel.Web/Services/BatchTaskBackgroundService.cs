@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using TelegramPanel.Core.BatchTasks;
 using TelegramPanel.Core.Services;
 using TelegramPanel.Data.Entities;
 using TelegramPanel.Modules;
@@ -55,6 +56,8 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         // 延迟一点，避免与启动时 DB 迁移抢资源
         await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
 
+        await RecoverInterruptedTasksAsync(stoppingToken);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -82,6 +85,17 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         }
     }
 
+    private async Task RecoverInterruptedTasksAsync(CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var taskManagement = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+        var requeued = await taskManagement.RequeueRunningTasksAsync();
+        if (requeued > 0)
+        {
+            _logger.LogInformation("Recovered {Count} interrupted running batch tasks and set them back to pending", requeued);
+        }
+    }
+
     private void CleanupCompletedTasks()
     {
         foreach (var kv in _runningTasks)
@@ -98,8 +112,14 @@ public sealed class BatchTaskBackgroundService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var taskManagement = scope.ServiceProvider.GetRequiredService<BatchTaskManagementService>();
+        var supportedTaskTypes = scope.ServiceProvider
+            .GetServices<IModuleTaskHandler>()
+            .Select(h => h.TaskType)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var pending = (await taskManagement.GetTasksByStatusAsync("pending"))
+            .Where(t => supportedTaskTypes.Contains(t.TaskType))
             .OrderBy(t => t.CreatedAt)
             .FirstOrDefault();
 
@@ -160,9 +180,26 @@ public sealed class BatchTaskBackgroundService : BackgroundService
                 if (latest != null && latest.Status != "running")
                     return;
 
+                if (latest != null && IsPersistentTask(latest))
+                {
+                    var requeued = await taskManagement.RequeueRunningTasksAsync(t => t.Id == pending.Id);
+                    _logger.LogWarning(
+                        "Persistent batch task returned without explicit completion; requeued instead of completing: {TaskId} {TaskType} (requeued={Requeued})",
+                        pending.Id,
+                        pending.TaskType,
+                        requeued);
+                    return;
+                }
+
                 await taskManagement.CompleteTaskAsync(pending.Id, success: true);
                 _logger.LogInformation("Batch task completed: {TaskId} {TaskType} (completed={Completed}, failed={Failed})",
                     pending.Id, pending.TaskType, completed, failed);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 宿主停机/容器重启时不要把正在执行的任务写成失败。
+                // 保持 running 状态，下一次启动由 RecoverInterruptedTasksAsync 重新排队。
+                _logger.LogInformation("Batch task interrupted by shutdown: {TaskId} {TaskType}", pending.Id, pending.TaskType);
             }
             catch (Exception ex)
             {
@@ -190,6 +227,33 @@ public sealed class BatchTaskBackgroundService : BackgroundService
         {
             _runningTasks.TryRemove(taskId, out _);
         }
+    }
+
+    private static bool IsPersistentTask(BatchTask task)
+    {
+        if (!string.Equals(task.TaskType, BatchTaskTypes.UserChatActive, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var config = (task.Config ?? string.Empty).Trim();
+        if (config.Length > 0)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(config);
+                if (document.RootElement.TryGetProperty("max_messages", out var maxMessages)
+                    && maxMessages.ValueKind == JsonValueKind.Number
+                    && maxMessages.TryGetInt32(out var value))
+                {
+                    return value <= 0;
+                }
+            }
+            catch (JsonException)
+            {
+                // Config 无法解析时回退到 Total，避免异常遮蔽任务本身的收尾逻辑。
+            }
+        }
+
+        return task.Total <= 0;
     }
 
     private sealed class DbBackedModuleTaskExecutionHost : IModuleTaskExecutionHost

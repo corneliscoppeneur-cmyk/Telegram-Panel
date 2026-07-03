@@ -16,6 +16,7 @@ namespace TelegramPanel.Web.Services;
 public class DataSyncService
 {
     private static readonly SemaphoreSlim SyncGate = new(1, 1);
+    private static readonly SemaphoreSlim SyncTaskCreationGate = new(1, 1);
 
     private readonly AccountManagementService _accountManagement;
     private readonly ChannelManagementService _channelManagement;
@@ -54,14 +55,17 @@ public class DataSyncService
 
     public async Task<TrackedSyncResult> RunAllActiveAccountsTrackedAsync(string trigger, CancellationToken cancellationToken)
     {
-        var task = await CreateTrackedTaskAsync(trigger, cancellationToken);
+        var task = await CreateTrackedTaskIfNoActiveAsync(trigger, throwIfActive: true, cancellationToken);
         return await ExecuteTrackedSyncAsync(task.Id, trigger, cancellationToken);
     }
 
     public async Task<int> StartAllActiveAccountsTrackedInBackgroundAsync(string trigger, CancellationToken cancellationToken = default)
     {
-        var task = await CreateTrackedTaskAsync(trigger, cancellationToken);
+        var task = await CreateTrackedTaskIfNoActiveAsync(trigger, throwIfActive: false, cancellationToken);
         var taskId = task.Id;
+        if (task.Status != "pending")
+            return taskId;
+
         var scopeFactory = _scopeFactory;
         var logger = _logger;
 
@@ -73,6 +77,10 @@ public class DataSyncService
                 var dataSync = scope.ServiceProvider.GetRequiredService<DataSyncService>();
                 await dataSync.ExecuteTrackedSyncAsync(taskId, trigger, CancellationToken.None);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Manual account sync background execution failed unexpectedly for task {TaskId}", taskId);
@@ -82,11 +90,46 @@ public class DataSyncService
         return taskId;
     }
 
+    private async Task<BatchTask> CreateTrackedTaskIfNoActiveAsync(string trigger, bool throwIfActive, CancellationToken cancellationToken)
+    {
+        await SyncTaskCreationGate.WaitAsync(cancellationToken);
+        try
+        {
+            var activeTask = await FindActiveAccountSyncTaskAsync();
+            if (activeTask != null)
+            {
+                if (throwIfActive)
+                    throw new InvalidOperationException($"账号数据同步已在运行，请到任务中心查看当前进度 #{activeTask.Id}");
+
+                return activeTask;
+            }
+
+            return await CreateTrackedTaskAsync(trigger, cancellationToken);
+        }
+        finally
+        {
+            SyncTaskCreationGate.Release();
+        }
+    }
+
+    private async Task<BatchTask?> FindActiveAccountSyncTaskAsync()
+    {
+        var activeTasks = (await _taskManagement.GetTasksByStatusAsync("running"))
+            .Concat(await _taskManagement.GetTasksByStatusAsync("pending"))
+            .Concat(await _taskManagement.GetTasksByStatusAsync("paused"))
+            .Where(t => string.Equals(t.TaskType, BatchTaskTypes.AccountAutoSync, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(t => t.Status == "running" ? 0 : t.Status == "pending" ? 1 : 2)
+            .ThenBy(t => t.CreatedAt)
+            .ToList();
+
+        return activeTasks.FirstOrDefault();
+    }
+
     private async Task<BatchTask> CreateTrackedTaskAsync(string trigger, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var accounts = await GetDistinctActiveAccountsAsync();
+        var (accounts, skippedAccounts) = SplitSyncEligibleAccounts(await GetDistinctActiveAccountsAsync());
 
         return await _taskManagement.CreateTaskAsync(new BatchTask
         {
@@ -100,11 +143,12 @@ public class DataSyncService
                 totalChannelsSynced: 0,
                 totalGroupsSynced: 0,
                 failures: Array.Empty<SyncFailureItem>(),
+                skippedAccounts: skippedAccounts.Select(ToSkippedItem).ToList(),
                 error: null)
         });
     }
 
-    private async Task<TrackedSyncResult> ExecuteTrackedSyncAsync(int taskId, string trigger, CancellationToken cancellationToken)
+    public async Task<TrackedSyncResult> ExecuteTrackedSyncAsync(int taskId, string trigger, CancellationToken cancellationToken)
     {
         var gateEntered = false;
 
@@ -114,7 +158,7 @@ public class DataSyncService
             if (!gateEntered)
                 throw new InvalidOperationException("账号数据同步已在运行，请到任务中心查看当前进度");
 
-            var accounts = await GetDistinctActiveAccountsAsync();
+            var (accounts, skippedAccounts) = SplitSyncEligibleAccounts(await GetDistinctActiveAccountsAsync());
             await _taskManagement.UpdateTaskDraftAsync(
                 taskId,
                 accounts.Count,
@@ -126,6 +170,7 @@ public class DataSyncService
                     totalChannelsSynced: 0,
                     totalGroupsSynced: 0,
                     failures: Array.Empty<SyncFailureItem>(),
+                    skippedAccounts: skippedAccounts.Select(ToSkippedItem).ToList(),
                     error: null));
 
             await _taskManagement.StartTaskAsync(taskId);
@@ -146,6 +191,7 @@ public class DataSyncService
                     totalChannelsSynced: summary.TotalChannelsSynced,
                     totalGroupsSynced: summary.TotalGroupsSynced,
                     failures: summary.AccountFailures.Select(ToFailureItem).ToList(),
+                    skippedAccounts: summary.SkippedAccounts.Select(ToSkippedItem).ToList(),
                     error: null));
             await _taskManagement.CompleteTaskAsync(taskId, success: true);
 
@@ -153,19 +199,8 @@ public class DataSyncService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            var snapshot = await _taskManagement.GetTaskAsync(taskId);
-            await _taskManagement.UpdateTaskConfigAsync(
-                taskId,
-                BuildSyncTaskConfig(
-                    trigger: trigger,
-                    totalAccounts: snapshot?.Total ?? 0,
-                    processedAccounts: snapshot?.Completed ?? 0,
-                    failedAccounts: snapshot?.Failed ?? 0,
-                    totalChannelsSynced: 0,
-                    totalGroupsSynced: 0,
-                    failures: Array.Empty<SyncFailureItem>(),
-                    error: "已取消"));
-            await _taskManagement.CompleteTaskAsync(taskId, success: false);
+            // 宿主停机时保留 running 状态，交给 BatchTaskBackgroundService 下次启动恢复为 pending。
+            // 否则容器重启会把正常中断的账号同步任务误标为失败。
             throw;
         }
         catch (Exception ex)
@@ -181,6 +216,7 @@ public class DataSyncService
                     totalChannelsSynced: 0,
                     totalGroupsSynced: 0,
                     failures: Array.Empty<SyncFailureItem>(),
+                    skippedAccounts: Array.Empty<SyncSkippedItem>(),
                     error: ex.Message));
             await _taskManagement.CompleteTaskAsync(taskId, success: false);
             throw;
@@ -198,6 +234,46 @@ public class DataSyncService
             .GroupBy(x => x.Id)
             .Select(x => x.First())
             .ToList();
+    }
+
+    private static (List<Account> Eligible, List<Account> Skipped) SplitSyncEligibleAccounts(IEnumerable<Account> accounts)
+    {
+        var eligible = new List<Account>();
+        var skipped = new List<Account>();
+
+        foreach (var account in accounts.Where(x => x != null)
+                     .GroupBy(x => x.Id)
+                     .Select(x => x.First()))
+        {
+            if (ShouldSkipAccountDataSync(account))
+                skipped.Add(account);
+            else
+                eligible.Add(account);
+        }
+
+        return (eligible, skipped);
+    }
+
+    private static bool ShouldSkipAccountDataSync(Account account)
+    {
+        var statusText = $"{account.TelegramStatusSummary} {account.TelegramStatusDetails}".Trim();
+        if (statusText.Length == 0)
+            return false;
+
+        var compact = statusText
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("　", string.Empty, StringComparison.Ordinal);
+
+        return statusText.Contains("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase)
+               || statusText.Contains("SESSION_REVOKED", StringComparison.OrdinalIgnoreCase)
+               || statusText.Contains("AUTH_KEY_DUPLICATED", StringComparison.OrdinalIgnoreCase)
+               || statusText.Contains("Can't read session block", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("Session失效", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("session已失效", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("Session已被撤销", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("Session无法读取", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("Session冲突", StringComparison.OrdinalIgnoreCase)
+               || compact.Contains("账号未登录", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<SyncSummary> SyncAllActiveAccountsAsync(
@@ -243,6 +319,26 @@ public class DataSyncService
             var account = accountList[index];
             var accountFailed = false;
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (ShouldSkipAccountDataSync(account))
+            {
+                summary.SkippedAccounts.Add((account.Id, account.Phone, account.TelegramStatusSummary ?? "Session 不可用"));
+                summary.ProcessedAccounts++;
+                if (progressCallback != null)
+                {
+                    await progressCallback(new SyncProgress(
+                        TotalAccounts: summary.TotalAccounts,
+                        ProcessedAccounts: summary.ProcessedAccounts,
+                        FailedAccounts: summary.FailedAccountsCount));
+                }
+
+                _logger.LogInformation(
+                    "Skipping account data sync because session is not recoverable: {AccountId} {Phone} {Reason}",
+                    account.Id,
+                    account.Phone,
+                    account.TelegramStatusSummary);
+                continue;
+            }
 
             _logger.LogInformation(
                 "Syncing account {Index}/{Total}: {AccountId} {Phone}",
@@ -326,7 +422,7 @@ public class DataSyncService
 
                 await _telegramTools.EnsureEstimatedRegistrationAsync(account.Id, cancellationToken);
 
-                await _accountManagement.UpdateLastSyncTimeAsync(account.Id);
+                await MarkAccountSyncSucceededAsync(account);
             }
             catch (Exception ex)
             {
@@ -414,6 +510,16 @@ public class DataSyncService
         return new SyncFailureItem(failure.AccountId, failure.Phone, failure.Error);
     }
 
+    private static SyncSkippedItem ToSkippedItem((int AccountId, string Phone, string Reason) skipped)
+    {
+        return new SyncSkippedItem(skipped.AccountId, skipped.Phone, skipped.Reason);
+    }
+
+    private static SyncSkippedItem ToSkippedItem(Account account)
+    {
+        return new SyncSkippedItem(account.Id, account.Phone, account.TelegramStatusSummary ?? "Session 不可用");
+    }
+
     private static string BuildSyncTaskConfig(
         string trigger,
         int totalAccounts,
@@ -422,6 +528,7 @@ public class DataSyncService
         int totalChannelsSynced,
         int totalGroupsSynced,
         IReadOnlyCollection<SyncFailureItem> failures,
+        IReadOnlyCollection<SyncSkippedItem> skippedAccounts,
         string? error)
     {
         var payload = new
@@ -432,7 +539,8 @@ public class DataSyncService
             {
                 "visible_channels_sync",
                 "visible_groups_sync",
-                "lightweight_telegram_status_refresh_on_sync_error"
+                "lightweight_telegram_status_refresh_on_sync_error",
+                "successful_sync_clears_transient_telegram_status"
             },
             excludes = new[]
             {
@@ -451,13 +559,46 @@ public class DataSyncService
                 totalGroupsSynced
             },
             failures = failures.Take(50).ToList(),
+            skippedAccounts = skippedAccounts.Take(100).ToList(),
             error
         };
 
         return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
     }
 
+    private async Task MarkAccountSyncSucceededAsync(Account account)
+    {
+        if (ShouldMarkTelegramStatusOkAfterSuccessfulSync(account))
+        {
+            var now = DateTime.UtcNow;
+            account.LastSyncAt = now;
+            account.TelegramStatusOk = true;
+            account.TelegramStatusSummary = "正常";
+            account.TelegramStatusDetails = "后台自动同步成功：频道/群组同步已完成，账号可连接 Telegram；未执行深度探测。";
+            account.TelegramStatusCheckedAtUtc = now;
+            await _accountManagement.UpdateAccountAsync(account);
+            return;
+        }
+
+        await _accountManagement.UpdateLastSyncTimeAsync(account.Id);
+    }
+
+    private static bool ShouldMarkTelegramStatusOkAfterSuccessfulSync(Account account)
+    {
+        var summary = (account.TelegramStatusSummary ?? string.Empty).Trim();
+        if (summary.Length == 0)
+            return true;
+
+        if (string.Equals(summary, "正常", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return summary.Contains("连接失败", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("请求超时", StringComparison.OrdinalIgnoreCase)
+               || summary.Contains("刷新失败", StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed record SyncFailureItem(int AccountId, string Phone, string Error);
+    private sealed record SyncSkippedItem(int AccountId, string Phone, string Reason);
 
     public sealed class SyncSummary
     {
@@ -468,6 +609,7 @@ public class DataSyncService
         public int TotalChannelsSynced { get; set; }
         public int TotalGroupsSynced { get; set; }
         public List<(int AccountId, string Phone, string Error)> AccountFailures { get; } = new();
+        public List<(int AccountId, string Phone, string Reason)> SkippedAccounts { get; } = new();
     }
 
     public readonly record struct SyncProgress(int TotalAccounts, int ProcessedAccounts, int FailedAccounts);

@@ -16,6 +16,7 @@ namespace TelegramPanel.Web.Services;
 public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 {
     private const int MaxFailureLines = 100;
+    private const int StartupRetryDelayMs = 30000;
 
     public string TaskType => BatchTaskTypes.UserChatActive;
 
@@ -26,78 +27,65 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         var accountManagement = host.Services.GetRequiredService<AccountManagementService>();
         var accountTools = host.Services.GetRequiredService<AccountTelegramToolsService>();
         var templateRendering = host.Services.GetRequiredService<TemplateRenderingService>();
+        var assetStorage = host.Services.GetRequiredService<ImageAssetStorageService>();
         var aiVerification = host.Services.GetRequiredService<UserChatActiveAiVerificationService>();
         var aiOptions = host.Services.GetRequiredService<IOptionsMonitor<AiOpenAiOptions>>();
 
         var config = DeserializeConfig(host.Config);
         ValidateAndNormalizeConfig(config);
+        if (!string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
+            await templateRendering.ValidateImageTemplateAsync(config.ImageDictionaryToken, cancellationToken);
+
         config.Canceled = false;
         config.Error = null;
         var configGate = new SemaphoreSlim(1, 1);
-
-        if (config.EnableAiVerification)
-        {
-            var settings = aiOptions.CurrentValue.ToSnapshot();
-            if (!settings.TryValidateForTask(config.AiModel, out var aiError))
-                throw new InvalidOperationException($"AI 验证已启用，但全局 AI 配置无效：{aiError}");
-        }
-
-        var selectedCategoryIds = NormalizeSelectedCategoryIds(config).ToHashSet();
-        var allAccounts = (await accountManagement.GetAllAccountsAsync())
-            .Where(x => x.IsActive && x.UserId > 0 && x.Category?.ExcludeFromOperations != true)
-            .Where(x => x.CategoryId.HasValue && selectedCategoryIds.Contains(x.CategoryId.Value))
-            .OrderBy(x => x.Id)
-            .ToList();
-
-        if (allAccounts.Count == 0)
-            throw new InvalidOperationException("所选分类下没有可用执行账号");
-
+        var progress = await LoadInitialProgressAsync(taskManagement, host.TaskId);
         var accountSlots = new List<AccountSlot>();
-        foreach (var account in allAccounts)
+        while (!cancellationToken.IsCancellationRequested)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!await host.IsStillRunningAsync(cancellationToken))
+            var preparation = await PrepareAccountSlotsAsync(
+                config,
+                host,
+                accountManagement,
+                accountTools,
+                aiOptions,
+                cancellationToken);
+
+            if (preparation.Canceled)
             {
                 config.Canceled = true;
                 await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
                 return;
             }
 
-            var slot = new AccountSlot(account);
-            foreach (var rawTarget in config.Targets)
+            if (preparation.Success)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!await host.IsStillRunningAsync(cancellationToken))
-                {
-                    config.Canceled = true;
-                    await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
-                    return;
-                }
-
-                var resolved = await accountTools.ResolveChatTargetAsync(account.Id, rawTarget, cancellationToken);
-                if (resolved.Success && resolved.Target != null)
-                {
-                    slot.Targets.Add(new TargetSlot(rawTarget, resolved.Target));
-                    continue;
-                }
-
-                AddFailure(config, account, rawTarget, NormalizeReason(resolved.Error));
+                accountSlots = preparation.AccountSlots;
+                config.Error = null;
+                await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
+                break;
             }
 
-            if (slot.Targets.Count > 0)
-                accountSlots.Add(slot);
-        }
-
-        if (accountSlots.Count == 0)
-        {
-            config.Error = "没有可用的账号-目标组合（请确认账号已加入目标群组/频道）";
+            config.Error = preparation.Error ?? "常驻任务暂时无法启动";
             await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
-            throw new InvalidOperationException(config.Error);
+
+            if (!IsPersistent(config))
+                throw new InvalidOperationException(config.Error);
+
+            logger.LogWarning(
+                "UserChatActive task waiting for retry (taskId={TaskId}): {Error}",
+                host.TaskId,
+                config.Error);
+
+            await host.UpdateProgressAsync(progress.Completed, progress.Failed, cancellationToken);
+            if (!await DelayWithPauseCheckAsync(host, StartupRetryDelayMs, cancellationToken))
+            {
+                config.Canceled = true;
+                await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
+                return;
+            }
         }
 
-        await PersistConfigAsync(taskManagement, host.TaskId, config, configGate, cancellationToken);
-
-        var progress = new TaskProgressCounter();
         var verificationFailures = new ConcurrentQueue<VerificationFailure>();
         var verificationTasks = new ConcurrentDictionary<Guid, Task>();
         using var verificationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -220,7 +208,10 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     continue;
                 }
 
-                if (text.Length == 0)
+                var imageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
+                var hasImageDictionary = imageDictionaryToken.Length > 0;
+
+                if (text.Length == 0 && !hasImageDictionary)
                 {
                     var completed = Interlocked.Increment(ref progress.Completed);
                     Interlocked.Increment(ref progress.Failed);
@@ -254,11 +245,34 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                     continue;
                 }
 
-                var send = await accountTools.SendMessageToResolvedChatAsync(
-                    accountSlot.Account.Id,
-                    targetSlot.Resolved,
-                    text,
-                    cancellationToken: cancellationToken);
+                (bool Success, string? Error, int? MessageId) send;
+                if (hasImageDictionary)
+                {
+                    try
+                    {
+                        var asset = await templateRendering.ResolveImageTemplateAsync(imageDictionaryToken, cancellationToken);
+                        await using var image = await assetStorage.OpenReadAsync(asset.AssetPath, cancellationToken);
+                        send = await accountTools.SendPhotoToResolvedChatAsync(
+                            accountSlot.Account.Id,
+                            targetSlot.Resolved,
+                            image,
+                            asset.FileName,
+                            text,
+                            cancellationToken: cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        send = (false, $"图片字典解析/发送准备失败：{ex.Message}", null);
+                    }
+                }
+                else
+                {
+                    send = await accountTools.SendMessageToResolvedChatAsync(
+                        accountSlot.Account.Id,
+                        targetSlot.Resolved,
+                        text,
+                        cancellationToken: cancellationToken);
+                }
 
                 var sendCompleted = Interlocked.Increment(ref progress.Completed);
                 var hadFailureThisRound = false;
@@ -442,12 +456,18 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             .Select(x => (x ?? string.Empty).Trim())
             .Where(x => x.Length > 0)
             .ToList();
+        config.ImageDictionaryToken = (config.ImageDictionaryToken ?? string.Empty).Trim();
+        if (config.ImageDictionaryToken.Length == 0)
+            config.ImageDictionaryToken = null;
 
         if (config.Targets.Count == 0)
             throw new InvalidOperationException("任务缺少目标群组/频道");
 
+        if (config.Dictionary.Count == 0 && string.IsNullOrWhiteSpace(config.ImageDictionaryToken))
+            throw new InvalidOperationException("任务缺少词典消息或图片字典");
+
         if (config.Dictionary.Count == 0)
-            throw new InvalidOperationException("任务缺少词典消息");
+            config.Dictionary.Add(string.Empty);
 
         if (config.DelayMinMs < 0) config.DelayMinMs = 0;
         if (config.DelayMaxMs < 0) config.DelayMaxMs = 0;
@@ -555,6 +575,78 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    private static async Task<TaskProgressCounter> LoadInitialProgressAsync(
+        BatchTaskManagementService taskManagement,
+        int taskId)
+    {
+        var task = await taskManagement.GetTaskAsync(taskId);
+        return new TaskProgressCounter
+        {
+            Completed = Math.Max(0, task?.Completed ?? 0),
+            Failed = Math.Max(0, task?.Failed ?? 0)
+        };
+    }
+
+    private static async Task<PrepareAccountSlotsResult> PrepareAccountSlotsAsync(
+        UserChatActiveTaskConfig config,
+        IModuleTaskExecutionHost host,
+        AccountManagementService accountManagement,
+        AccountTelegramToolsService accountTools,
+        IOptionsMonitor<AiOpenAiOptions> aiOptions,
+        CancellationToken cancellationToken)
+    {
+        if (config.EnableAiVerification)
+        {
+            var settings = aiOptions.CurrentValue.ToSnapshot();
+            if (!settings.TryValidateForTask(config.AiModel, out var aiError))
+                return PrepareAccountSlotsResult.Failed($"AI 验证已启用，但全局 AI 配置无效：{aiError}");
+        }
+
+        var selectedCategoryIds = NormalizeSelectedCategoryIds(config).ToHashSet();
+        var allAccounts = (await accountManagement.GetAllAccountsAsync())
+            .Where(x => x.IsActive && x.UserId > 0 && x.Category?.ExcludeFromOperations != true)
+            .Where(x => x.CategoryId.HasValue && selectedCategoryIds.Contains(x.CategoryId.Value))
+            .OrderBy(x => x.Id)
+            .ToList();
+
+        if (allAccounts.Count == 0)
+            return PrepareAccountSlotsResult.Failed("所选分类下没有可用执行账号");
+
+        var accountSlots = new List<AccountSlot>();
+        foreach (var account in allAccounts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await host.IsStillRunningAsync(cancellationToken))
+                return PrepareAccountSlotsResult.CanceledResult();
+
+            var slot = new AccountSlot(account);
+            foreach (var rawTarget in config.Targets)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!await host.IsStillRunningAsync(cancellationToken))
+                    return PrepareAccountSlotsResult.CanceledResult();
+
+                var resolved = await accountTools.ResolveChatTargetAsync(account.Id, rawTarget, cancellationToken);
+                if (resolved.Success && resolved.Target != null)
+                {
+                    slot.Targets.Add(new TargetSlot(rawTarget, resolved.Target));
+                    continue;
+                }
+
+                AddFailure(config, account, rawTarget, NormalizeReason(resolved.Error));
+            }
+
+            if (slot.Targets.Count > 0)
+                accountSlots.Add(slot);
+        }
+
+        return accountSlots.Count == 0
+            ? PrepareAccountSlotsResult.Failed("没有可用的账号-目标组合（请确认账号已加入目标群组/频道）")
+            : PrepareAccountSlotsResult.Ok(accountSlots);
+    }
+
+    private static bool IsPersistent(UserChatActiveTaskConfig config) => config.MaxMessages <= 0;
 
     private static int SelectIndex(string mode, int count, ref int queueIndex)
     {
@@ -832,6 +924,22 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         string AccountDisplayName,
         string RawTarget,
         string Reason);
+
+    private sealed record PrepareAccountSlotsResult(
+        bool Success,
+        bool Canceled,
+        string? Error,
+        List<AccountSlot> AccountSlots)
+    {
+        public static PrepareAccountSlotsResult Ok(List<AccountSlot> accountSlots) =>
+            new(true, false, null, accountSlots);
+
+        public static PrepareAccountSlotsResult Failed(string error) =>
+            new(false, false, error, new List<AccountSlot>());
+
+        public static PrepareAccountSlotsResult CanceledResult() =>
+            new(false, true, null, new List<AccountSlot>());
+    }
 
     private static bool IsVerificationTimeout(string? error)
     {

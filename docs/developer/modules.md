@@ -1,6 +1,6 @@
 ﻿# 模块系统（可安装/可卸载）
 
-本项目提供一个“模块系统”框架，用于把**任务能力**与**外部 API 能力**以模块形式分发、安装、启用与回滚，避免因为扩展功能不兼容导致主站不可用。
+本项目提供一个“模块系统”框架，用于把**任务能力**、**外部 API 能力**与**后台管理能力**以模块形式分发、安装、启用与回滚，避免因为扩展功能不兼容导致主站不可用。
 
 > 当前实现为**同进程插件**（动态加载程序集）。为稳定起见：安装/启用/停用/卸载后通常需要**重启服务**才能生效。
 
@@ -11,6 +11,7 @@
 - 依赖管理：模块声明依赖的模块与版本范围（`>=1.2.3 <2.0.0`）
 - 兼容性：模块声明宿主版本区间（`host.min/host.max`）
 - 失败自动兜底：模块加载失败时自动尝试回滚到 `LastGoodVersion`，否则自动禁用以避免拖垮系统
+- Vue 后台适配：新模块优先提供管理端 API，由宿主 Vue 后台承载页面；旧 Razor 页面继续保留兼容入口
 
 ## 面板入口
 
@@ -39,9 +40,165 @@
 - `IModuleTaskHandler`：实现任务中心后台执行器（让后台真正能跑该任务）
 - `IModuleTaskRerunBuilder`：为“重新运行”提供专用的配置重建逻辑（适合需要清洗旧配置的任务）
 - `IModuleApiProvider`：声明模块提供的外部 API 类型（让 API 管理页面可动态创建配置项）
-- `IModuleUiProvider`：声明模块扩展 UI 导航与页面（让面板可挂载模块自定义页面）
+- `IModuleUiProvider`：声明模块扩展导航与旧 Razor 页面（Vue 后台会通过兼容入口挂载）
 
 > 说明：模块启用/停用通常需要重启；宿主启动时只会加载“启用”的模块，因此 UI/任务/API 列表会随启用状态变化。
+
+## 长时间运行任务与重启恢复（重要）
+
+如果你的模块实现的是“持续监控 / 长轮询 / 等待条件出现后再执行”的任务，需要注意下面这几个规则：
+
+### 1）批量任务框架默认仍然是“一次执行”
+
+- 宿主的 `BatchTaskBackgroundService` 会从数据库里捞出 `pending` 任务，调用对应的 `IModuleTaskHandler.ExecuteAsync(...)`
+- **只要你的 `ExecuteAsync(...)` 返回，宿主就会把这条批量任务标记为 `completed` 或 `failed`**
+- 所以“持续任务”并不是宿主自动帮你持续；而是你的执行器必须自己维持循环，并在适当的时候才返回
+
+换句话说：
+
+- 一次性任务：执行器跑完就返回
+- 持续监控任务：执行器自己 `while (...)` 循环，直到达到停止条件、被用户暂停/取消，或者你明确决定结束
+
+### 2）持续任务必须轮询 `IsStillRunningAsync(...)`
+
+宿主通过 `IModuleTaskExecutionHost.IsStillRunningAsync(...)` 把“当前任务是否还允许继续跑”暴露给模块。
+
+模块作者在长循环里必须定期检查：
+
+```csharp
+while (!cancellationToken.IsCancellationRequested)
+{
+    if (!await host.IsStillRunningAsync(cancellationToken))
+        return;
+
+    // 你的持续监控逻辑
+}
+```
+
+推荐检查位置：
+
+- 每一轮大循环开始时
+- 每次 `Task.Delay(...)` 前后
+- 每次外部请求、网络调用、数据库批量操作前
+
+这样用户在任务中心点击“暂停 / 恢复 / 取消”时，模块才能及时响应。
+
+### 3）持续任务的运行状态必须写回 `task.Config`
+
+如果你的任务需要跨轮次记住状态，例如：
+
+- 已处理过哪些用户名 / 频道 / 消息
+- 上次检查时间
+- 当前游标 / offset / pageToken
+- 外部系统返回的中间状态
+
+不要只存在内存里，应该定期序列化回 `BatchTask.Config`。
+
+宿主提供了 `BatchTaskManagementService.UpdateTaskConfigAsync(...)`，推荐在模块里这样做：
+
+```csharp
+var taskManagement = host.Services.GetRequiredService<BatchTaskManagementService>();
+
+config.LastCheckTime = DateTime.UtcNow;
+config.ProcessedIds = processedIds.ToList();
+
+await taskManagement.UpdateTaskConfigAsync(
+    host.TaskId,
+    JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+```
+
+这样做的目的有两个：
+
+- 任务详情里能看到实时状态
+- 宿主重启后，任务可以从上次进度继续恢复，而不是从头开始
+
+### 4）宿主现在会自动恢复“中断中的 running 任务”
+
+当前宿主实现中，`BatchTaskBackgroundService` 启动时会把数据库里残留的 `running` 批量任务重新置回 `pending`，然后由后台执行器重新拉起。
+
+这意味着：
+
+- 如果程序异常退出 / 重启
+- 只要这条任务上次状态还停留在 `running`
+- 宿主下次启动后会自动尝试恢复它
+
+因此，**模块作者必须把持续任务写成“可重复进入、可从 Config 恢复”的形式**。
+
+也就是说，不要依赖：
+
+- 进程内静态变量
+- 单次启动时生成但未持久化的随机状态
+- 只存在内存里的队列 / 集合 / 指针
+
+而应该依赖：
+
+- `task.Config`
+- 模块自己的持久化数据目录
+- 外部系统里可重复读取的状态
+
+### 5）“持续任务”和“Cron 计划任务”不是一回事
+
+宿主里现在有两套概念：
+
+- **批量任务（BatchTask）**
+  说明：提交后立即执行一次；是否持续由模块执行器自己决定
+- **计划任务（ScheduledTask / Cron）**
+  说明：由宿主按 Cron 周期反复创建新的批量任务
+
+适用建议：
+
+- 想要“进程内一直守着等机会”：用持续批量任务
+- 想要“每隔一段时间触发一次检查”：用 Cron 计划任务
+
+如果模块页面没有走任务中心的“Cron 计划”创建入口，而是自己直接 `CreateTaskAsync(...)`，那它创建出来的就只是普通批量任务，不会自动变成计划任务。
+
+### 6）持续任务的停止条件要写清楚
+
+模块作者最好明确区分以下几种结束原因：
+
+- 用户主动暂停 / 取消
+- 达到运行时长上限
+- 所有目标都已处理完成
+- 当前资源暂时不足，但后续可能恢复
+
+其中最后一种很常见，比如：
+
+- 暂时没有可用私密频道
+- 目标接口限流
+- 外部站点临时不可达
+
+这类情况如果业务上允许后续继续等待，**不要直接结束任务**，而应该：
+
+1. 写入错误/提示状态到 `Config`
+2. 等待一段时间
+3. 进入下一轮重试
+
+示例：
+
+```csharp
+if (availableChannels.Count == 0)
+{
+    config.Error = "当前没有可用私密频道";
+    await SaveConfigAsync(taskManagement, host.TaskId, config);
+
+    if (!await DelayWithPauseCheckAsync(host, TimeSpan.FromMinutes(5), cancellationToken))
+        return;
+
+    continue;
+}
+```
+
+### 7）给持续任务的一个实践建议
+
+如果你的模块是“监控类任务”，推荐至少维护这些字段：
+
+- `StartedAtUtc`
+- `LastCheckTime`
+- `Error`
+- `Canceled`
+- 业务游标（例如 `AssignedUsernames` / `HandledMessageIds` / `LastOffset`）
+
+这样无论是排错、前端展示，还是重启恢复，都会清晰很多。
 
 ## Bot 更新订阅（allowed_updates）
 
@@ -49,16 +206,18 @@
 
 注意：宿主会为 `getUpdates` / `setWebhook` 固定传入 `allowed_updates` 白名单（见 `src/TelegramPanel.Core/Services/Telegram/BotUpdateHub.cs` 的 `AllowedUpdatesJson`）。当前已包含成员变更与入群请求：`chat_member`、`chat_join_request`；后续如你的模块需要其它更新类型，需要先在宿主侧扩展该白名单并发布宿主版本。
 
-## 配置入口与“窗口编辑”（推荐）
+## 配置入口与“窗口编辑”
 
-如果你的模块需要“配置界面”，推荐以 **模块页面**（`IModuleUiProvider.GetPages`）的形式提供，然后在 `ModuleTaskDefinition.CreateRoute` 中指向该页面的路由：
+如果你的模块需要配置界面，优先按 Vue 后台的方式设计：模块在 `MapEndpoints` 中提供管理端 API，宿主 Vue 页面负责展示和编辑。
+
+对还没有 Vue 原生页面的旧模块，可以继续用 **Razor 模块页面**（`IModuleUiProvider.GetPages`）作为兼容配置入口，然后在 `ModuleTaskDefinition.CreateRoute` 中指向该页面的路由：
 
 - 模块页面路由固定为：`/ext/{ModuleId}/{PageKey}`
 - 当 `CreateRoute` 指向 `/ext/...` 时：
   - “新建任务”弹窗会提供“打开窗口/前往页面”两种方式
   - “任务中心”会在顶部的“持续任务（可配置）”区域展示该任务，并提供“编辑”按钮直接打开配置窗口
 
-这样可以获得类似“配置窗口”的体验，同时仍复用模块页面渲染能力（`DynamicComponent`）。
+这样可以获得类似“配置窗口”的体验，同时仍复用旧模块页面渲染能力。Vue 后台会把这类入口放进兼容窗口或兼容页面中加载。
 
 > 提醒：保存配置应尽量做到“立即生效”；只有模块启用/停用（影响 DI/后台服务装载）才需要重启。
 
@@ -413,9 +572,11 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 
 否则会出现“包结构看似正常，但 Telegram Desktop 仍要求重新登录”。
 
-## UI 模块项目模板（Razor 组件）
+## 旧版 UI 模块项目模板（Razor 组件，兼容模式）
 
-如果你的模块需要提供页面（`IModuleUiProvider.GetPages`），推荐把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
+主后台已经迁移到 Vue。新模块不建议再把复杂管理界面写成 Razor 组件；推荐模块提供 `/api/panel/extensions/{module-slug}` 管理接口，由宿主 Vue 页面承载操作界面。
+
+如果你的模块已经有旧页面，或暂时没有对应的 Vue 原生页面，仍可以通过 `IModuleUiProvider.GetPages` 提供兼容 Razor 页面。此时可以把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk.Razor">
@@ -431,9 +592,79 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 </Project>
 ```
 
-建议在模块根目录放一个 `_Imports.razor`，把常用命名空间一次性导入（例如 `MudBlazor`、`Microsoft.AspNetCore.Components` 等），避免每个页面重复写。
+旧 Razor 页面建议在模块根目录放一个 `_Imports.razor`，把常用命名空间一次性导入（例如 `MudBlazor`、`Microsoft.AspNetCore.Components` 等），避免每个页面重复写。
 
-> 注意：模块项目引用 `MudBlazor` 主要用于编译期；运行时会跟随宿主加载。若模块需要自带静态资源（CSS/JS），宿主不会自动暴露模块的 `wwwroot`，你需要在 `MapEndpoints` 中自行提供静态文件访问（或把样式/脚本内联到页面里）。
+> 注意：模块项目引用 `MudBlazor` 主要用于旧页面编译期；运行时会跟随宿主加载。若模块需要自带静态资源（CSS/JS），宿主不会自动暴露模块的 `wwwroot`，你需要在 `MapEndpoints` 中自行提供静态文件访问（或把样式/脚本内联到页面里）。
+
+## Vue 后台迁移后的模块页面约定
+
+后台管理界面已经迁移到 Vue SPA，入口在 `/ui` 下。模块开发时需要区分两种页面形态：
+
+1. **宿主 Vue 原生页面**：页面代码在宿主 `frontend/src/views/extensions/`，数据由模块提供 `/api/panel/extensions/{slug}` 管理接口。
+2. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}` 作为兼容入口。
+
+新模块默认按第一种方式设计。也就是说，模块负责能力、配置、运行态数据和保存接口，宿主 Vue 后台负责页面呈现。只有旧模块、简单页面或暂时没有 Vue 原生页面时，才继续使用 Razor 兼容页面。
+
+如果模块没有被宿主 Vue 页面接管，不需要为了 Vue 迁移重写模块。宿主的通用 Vue 页面会用 iframe 加载旧模块页面：
+
+```text
+/ui/ext/{moduleId}/{pageKey}
+  -> /ext/{moduleId}/{pageKey}?legacy=1&embed=1
+```
+
+如果模块已经有对应的 Vue 原生页面，就必须在模块里补齐管理端 API。否则 Vue 页面会请求不到接口，通常表现为 `404`，并回退到旧页面。
+
+### 给 Vue 页面提供管理端 API
+
+在模块入口的 `MapEndpoints` 中注册管理端接口，推荐统一放在：
+
+```text
+/api/panel/extensions/{module-slug}
+```
+
+示例：
+
+```csharp
+public void MapEndpoints(IEndpointRouteBuilder endpoints, ModuleHostContext context)
+{
+    var group = endpoints.MapGroup("/api/panel/extensions/my-module");
+
+    var configuration = endpoints.ServiceProvider.GetService<IConfiguration>();
+    if (configuration?.GetValue<bool>("AdminAuth:Enabled") == true)
+        group.RequireAuthorization();
+
+    group.MapGet("", GetPageAsync);
+    group.MapPost("/settings", SaveSettingsAsync);
+}
+```
+
+约定：
+
+- 这个前缀只用于后台管理接口，不要放匿名外链或公开 API。
+- 返回 DTO，不要直接返回 EF 实体或内部运行态对象。
+- Vue 页面需要的列表、设置、运行态快照，优先通过一个 `GET ""` 聚合返回，避免页面首次加载打很多请求。
+- 写接口时要把“读取初始数据”和“保存配置”分清楚，避免页面刷新时触发耗时 Telegram 操作。
+- 修改接口后必须递增 `manifest.json` 的 `version`，重新打包 `.tpm` 并更新生产模块包。
+- 新接口上线前保留旧 Razor 页面，便于回退和排障。
+
+### 导航与路由怎么写
+
+模块仍然可以通过 `GetNavItems` 返回 `/ext/{moduleId}/{pageKey}`。宿主会把模块导航转换到 Vue 路由下，不需要在模块里硬编码 `/ui`。
+
+```csharp
+public IEnumerable<ModuleNavItem> GetNavItems(ModuleHostContext context)
+{
+    yield return new ModuleNavItem
+    {
+        Title = "模块设置",
+        Href = "/ext/my-module/settings",
+        Group = "扩展模块",
+        Order = 100
+    };
+}
+```
+
+如果宿主已经为某个模块写了固定 Vue 页面，模块也可以不返回导航项，由宿主菜单直接提供入口。
 
 ## 开发/调试建议
 
@@ -754,13 +985,27 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 
 > 内置 kick 接口提供了一个参考实现：`src/TelegramPanel.Web/ExternalApi/KickApi.cs`
 
-## UI 扩展（页面/导航）
+## UI 扩展（Vue 后台与旧页面兼容）
+
+> 后台已经是 Vue SPA。新模块优先提供管理端 API，由宿主 Vue 页面承载。旧 Razor 页面仍然支持，但只作为兼容方案；如果该模块已有宿主 Vue 原生页，必须同步提供 `/api/panel/extensions/{slug}` 管理接口。完整约定见上面的“Vue 后台迁移后的模块页面约定”。
 
 ### 1) 添加导航链接（可选）
 
 实现 `IModuleUiProvider.GetNavItems` 返回 `ModuleNavItem`（Title/Href/Icon/Group/Order）。
 
-### 2) 添加模块页面（推荐）
+导航可以继续写 `/ext/{moduleId}/{pageKey}`，宿主会在 Vue 后台里转换成兼容路由。模块里不要硬编码 `/ui`。
+
+### 2) 提供 Vue 管理接口（新模块推荐）
+
+新模块如果需要管理界面，推荐先提供管理端 API：
+
+```text
+/api/panel/extensions/{module-slug}
+```
+
+然后由宿主 Vue 页面读取这些接口。这样页面刷新、侧栏切换、弹窗编辑都不依赖 Blazor Server 连接，也更容易保持和主后台一致的 UI。
+
+### 3) 添加旧 Razor 模块页面（兼容）
 
 实现 `IModuleUiProvider.GetPages` 返回 `ModulePageDefinition`：
 
@@ -769,7 +1014,7 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 
 宿主提供统一入口路由：`/ext/{moduleId}/{pageKey}`，会动态加载并渲染模块组件。
 
-### 3) 模块页面参数约定（非常重要）
+### 4) 模块页面参数约定（非常重要）
 
 宿主会把 `ModuleId` 与 `PageKey` 作为组件参数注入，因此模块页面组件必须声明以下两个参数，否则运行时会 500（组件不接受宿主注入的参数）：
 
@@ -795,13 +1040,16 @@ public IEnumerable<ModuleApiTypeDefinition> GetApis(ModuleHostContext context)
 ## 认证/授权（端点安全）
 
 - **模块页面**：作为面板的一部分渲染，通常受宿主的后台登录控制（管理员登录开启时会要求授权）。
+- **Vue 管理接口**（`/api/panel/extensions/{slug}`）：属于后台管理接口，通常应跟随宿主后台登录鉴权。
 - **模块 API 端点**（`MapEndpoints`）：请显式选择：
   - `AllowAnonymous()`：公开接口（务必自行做好鉴权/限流/防泄露）
   - 或 `RequireAuthorization()`：跟随宿主后台登录鉴权
 
 如果是“外置链接/匿名链接”类能力，建议：
 
+- 不要放在 `/ext/...` 后台模块页面，也不要放在 `/api/panel/extensions/...` 管理接口下面
 - 使用随机 token 作为访问凭证
+- 设置过期时间，并按账号/客户隔离可见范围
 - 做好限流（按 token + IP）
 - 返回 `no-store` 防缓存
 

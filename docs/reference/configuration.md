@@ -2,8 +2,9 @@
 
 ## 技术栈
 
-- .NET 8 / ASP.NET Core / Blazor Server
-- MudBlazor
+- .NET 8 / ASP.NET Core Minimal API
+- Vue 3 / Element Plus（主后台）
+- Razor / MudBlazor（旧模块页面兼容）
 - EF Core（默认 SQLite）
 - WTelegramClient（MTProto）
 

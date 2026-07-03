@@ -1,7 +1,17 @@
+FROM node:20-bookworm-slim AS frontend-build
+WORKDIR /src/frontend
+
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN corepack enable \
+    && pnpm install --frozen-lockfile=false
+COPY frontend/ ./
+RUN pnpm run build
+
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 COPY . .
+COPY --from=frontend-build /src/src/TelegramPanel.Web/wwwroot/panel-spa ./src/TelegramPanel.Web/wwwroot/panel-spa
 
 RUN dotnet restore "TelegramPanel.sln"
 RUN dotnet publish "src/TelegramPanel.Web/TelegramPanel.Web.csproj" -c Release -o /app/publish --no-restore
@@ -9,8 +19,11 @@ RUN dotnet publish "src/TelegramPanel.Web/TelegramPanel.Web.csproj" -c Release -
 # tdata 运行时依赖（避免在容器内通过 apt 安装 Node）
 FROM node:20-bookworm-slim AS tdata-runtime
 WORKDIR /opt/telegram-panel-tdata-runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN printf '{\n  "name": "telegram-panel-tdata-runtime",\n  "private": true,\n  "type": "module"\n}\n' > package.json \
-    && npm install --silent @mtcute/convert @mtcute/node
+    && npm install --omit=dev --no-audit --no-fund --loglevel=warn @mtcute/convert @mtcute/node
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
@@ -18,6 +31,10 @@ WORKDIR /app
 ENV ASPNETCORE_URLS=http://+:5000
 ENV TELEGRAM_PANEL_TDATA_RUNTIME_DIR=/app/tdata-runtime
 EXPOSE 5000
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # 持久化目录：/data（通过 docker-compose 挂载）
 # - 数据库：/data/telegram-panel.db

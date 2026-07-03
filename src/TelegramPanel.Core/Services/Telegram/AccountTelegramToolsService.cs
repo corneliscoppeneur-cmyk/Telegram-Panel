@@ -1142,6 +1142,54 @@ public class AccountTelegramToolsService
         }
     }
 
+    /// <summary>
+    /// 向已解析的群组/频道目标发送图片，可附带纯文本 caption。
+    /// </summary>
+    public async Task<(bool Success, string? Error, int? MessageId)> SendPhotoToResolvedChatAsync(
+        int accountId,
+        ResolvedChatTarget target,
+        Stream imageStream,
+        string fileName,
+        string? caption = null,
+        int? replyToMessageId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (imageStream == null)
+                return (false, "图片内容为空", null);
+
+            var text = (caption ?? string.Empty).Trim();
+            if (text.Length > 1024)
+                return (false, "图片说明文字超过 Telegram 1024 字符限制", null);
+
+            var uploadName = NormalizeUploadFileName(fileName);
+            if (imageStream.CanSeek)
+                imageStream.Position = 0;
+
+            var client = await GetOrCreateConnectedClientAsync(accountId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var uploaded = await client.UploadFileAsync(imageStream, uploadName);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var sent = await client.SendMediaAsync(
+                target.Peer,
+                text.Length == 0 ? null : text,
+                uploaded,
+                "photo",
+                replyToMessageId ?? 0);
+
+            return (true, null, sent.id);
+        }
+        catch (Exception ex)
+        {
+            var (summary, details) = MapTelegramException(ex);
+            var msg = string.IsNullOrWhiteSpace(details) ? summary : $"{summary}：{details}";
+            return (false, msg, null);
+        }
+    }
+
     public async Task<(bool Success, string? Error, TelegramVerificationMessageCandidate? Candidate)> WaitForBotVerificationMessageAsync(
         int accountId,
         ResolvedChatTarget target,
@@ -1917,6 +1965,12 @@ public class AccountTelegramToolsService
         return ok;
     }
 
+    private static string NormalizeUploadFileName(string? fileName)
+    {
+        var name = Path.GetFileName((fileName ?? string.Empty).Trim());
+        return string.IsNullOrWhiteSpace(name) ? "image.jpg" : name;
+    }
+
     private async Task<InputPeerUser?> TryResolveSystemPeerAsync(Client client)
     {
         try
@@ -2253,6 +2307,12 @@ public class AccountTelegramToolsService
 
         if (msg.Contains("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase))
             return ("Session 失效（AUTH_KEY_UNREGISTERED）", msg);
+
+        if (msg.Contains("session 已失效", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("session已失效", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("账号未登录", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("not logged in", StringComparison.OrdinalIgnoreCase))
+            return ("Session 失效", msg);
 
         if (msg.Contains("AUTH_KEY_DUPLICATED", StringComparison.OrdinalIgnoreCase))
             return ("Session 冲突（AUTH_KEY_DUPLICATED）", "该 Session 可能在其他设备/应用上同时使用，导致密钥冲突。" + Environment.NewLine + msg);
