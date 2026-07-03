@@ -50,44 +50,51 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <ColumnVisibilityMenu
+          v-model="visibleColumnKeys"
+          :columns="chatResourceColumns"
+          :disabled="loading"
+          @reset="resetColumns"
+          @show-all="showAllColumns"
+        />
         <el-tag v-if="selectedIds.length" type="primary" effect="plain">已选 {{ selectedIds.length }}</el-tag>
         <span v-else class="muted">{{ kindName }} ({{ total }})</span>
       </div>
 
       <el-table ref="tableRef" v-loading="loading" :data="rows" stripe row-key="id" @selection-change="onSelectionChange">
         <el-table-column type="selection" width="46" />
-        <el-table-column :label="`${kindName}名称`" min-width="240">
+        <el-table-column v-if="isColumnVisible('title')" :label="`${kindName}名称`" min-width="240">
           <template #default="{ row }">
             <div class="cell-main">{{ row.title }}</div>
             <div v-if="row.about" class="cell-sub">{{ truncate(row.about, 56) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="用户名" min-width="140">
+        <el-table-column v-if="isColumnVisible('username')" label="用户名" min-width="140">
           <template #default="{ row }">
             <el-tag v-if="row.username" size="small">@{{ row.username }}</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="90">
+        <el-table-column v-if="isColumnVisible('type')" label="类型" width="90">
           <template #default="{ row }">
             <el-tag :type="row.username ? 'success' : 'warning'" size="small">{{ row.username ? '公开' : '私密' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="分类" min-width="120">
+        <el-table-column v-if="isColumnVisible('category')" label="分类" min-width="120">
           <template #default="{ row }">
             <el-tag :type="rowCategoryId(row) ? 'primary' : 'info'" size="small">{{ rowCategoryName(row) || '未分类' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="memberCount" label="成员数" width="90" />
-        <el-table-column v-if="filters.accountId > 0" label="当前账号角色" width="120">
+        <el-table-column v-if="isColumnVisible('memberCount')" prop="memberCount" label="成员数" width="90" />
+        <el-table-column v-if="filters.accountId > 0 && isColumnVisible('currentRole')" label="当前账号角色" width="120">
           <template #default="{ row }">
             <el-tag size="small" :type="roleTagType(currentRole(row))">{{ currentRoleText(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建账号" min-width="130">
+        <el-table-column v-if="isColumnVisible('creator')" label="创建账号" min-width="130">
           <template #default="{ row }">{{ row.creatorDisplayPhone || (row.creatorAccountId ? `账号 ${row.creatorAccountId}` : '-') }}</template>
         </el-table-column>
-        <el-table-column label="最后同步" width="180">
+        <el-table-column v-if="isColumnVisible('syncedAt')" label="最后同步" width="180">
           <template #default="{ row }">{{ formatTime(row.syncedAt) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
@@ -415,8 +422,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type TableInstance, type UploadUserFile } from 'element-plus'
 import { ArrowDown, Edit, Folder, MoreFilled, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { ChannelListItem, ChatAdmin, ChatMembershipAccount, GroupListItem, OperationAccount, SimpleCategory, TextPreset } from '@/api/types'
 import { formatTime } from '@/utils/format'
+import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
 
 type Kind = 'channel' | 'group'
 type Row = ChannelListItem | GroupListItem
@@ -448,6 +457,22 @@ const filters = reactive({
   categoryId: -1,
   search: '',
 })
+
+const chatResourceColumns: ColumnVisibilityOption[] = [
+  { key: 'title', label: `${kindName.value}名称` },
+  { key: 'username', label: '用户名' },
+  { key: 'type', label: '类型' },
+  { key: 'category', label: '分类' },
+  { key: 'memberCount', label: '成员数' },
+  { key: 'currentRole', label: '当前账号角色' },
+  { key: 'creator', label: '创建账号' },
+  { key: 'syncedAt', label: '最后同步' },
+]
+
+const { visibleColumnKeys, isColumnVisible, resetColumns, showAllColumns } = usePersistentColumnVisibility(
+  `telegram-panel.${props.kind}.columns`,
+  chatResourceColumns,
+)
 
 const detail = reactive({
   visible: false,

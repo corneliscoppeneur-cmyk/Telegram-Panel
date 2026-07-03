@@ -62,6 +62,14 @@
         </template>
       </el-dropdown>
 
+      <ColumnVisibilityMenu
+        v-model="visibleColumnKeys"
+        :columns="accountColumns"
+        :disabled="loading"
+        @reset="resetColumns"
+        @show-all="showAllColumns"
+      />
+
       <el-tag v-if="selectedIds.length > 0" type="info">已选 {{ selectedIds.length }}</el-tag>
       <span v-else class="muted">共 {{ total }} 个账号</span>
     </div>
@@ -77,14 +85,14 @@
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="48" reserve-selection />
-        <el-table-column prop="displayPhone" label="手机号" min-width="150" />
-        <el-table-column prop="nickname" label="昵称" min-width="130">
+        <el-table-column v-if="isColumnVisible('phone')" prop="displayPhone" label="手机号" min-width="150" />
+        <el-table-column v-if="isColumnVisible('nickname')" prop="nickname" label="昵称" min-width="130">
           <template #default="{ row }">{{ row.nickname || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="username" label="用户名" min-width="130">
+        <el-table-column v-if="isColumnVisible('username')" prop="username" label="用户名" min-width="130">
           <template #default="{ row }">{{ row.username ? `@${row.username}` : '-' }}</template>
         </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="170">
+        <el-table-column v-if="isColumnVisible('remark')" prop="remark" label="备注" min-width="170">
           <template #default="{ row }">
             <el-tooltip v-if="row.remark" :content="row.remark" placement="top">
               <span class="ellipsis">{{ row.remark }}</span>
@@ -92,8 +100,8 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="userId" label="用户ID" min-width="120" />
-        <el-table-column label="分类" min-width="130">
+        <el-table-column v-if="isColumnVisible('userId')" prop="userId" label="用户ID" min-width="120" />
+        <el-table-column v-if="isColumnVisible('category')" label="分类" min-width="130">
           <template #default="{ row }">
             <el-tag v-if="row.category" class="account-category-tag" effect="plain" :style="accountCategoryTagStyle(row.category)">
               {{ row.category.name }}
@@ -101,15 +109,15 @@
             <span v-else>未分类</span>
           </template>
         </el-table-column>
-        <el-table-column label="频道/群组" width="110">
+        <el-table-column v-if="isColumnVisible('chatCounts')" label="频道/群组" width="110">
           <template #default="{ row }">{{ row.channelCount }} / {{ row.groupCount }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="86">
+        <el-table-column v-if="isColumnVisible('active')" label="状态" width="86">
           <template #default="{ row }">
             <el-tag :type="row.isActive ? 'success' : 'info'" size="small">{{ row.isActive ? '活跃' : '停用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Telegram 状态" min-width="180">
+        <el-table-column v-if="isColumnVisible('telegramStatus')" label="Telegram 状态" min-width="180">
           <template #default="{ row }">
             <el-tooltip v-if="row.telegramStatusSummary" :content="buildStatusTitle(row)" placement="top">
               <el-tag :type="row.telegramStatusOk ? 'success' : 'danger'" size="small">{{ row.telegramStatusSummary }}</el-tag>
@@ -117,10 +125,10 @@
             <el-tag v-else type="info" size="small">未检测</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="注册时间（估算，非百分百正确）" min-width="210">
+        <el-table-column v-if="isColumnVisible('registrationAt')" label="注册时间（估算，非百分百正确）" min-width="210">
           <template #default="{ row }">{{ formatTime(row.estimatedRegistrationAt, '-') }}</template>
         </el-table-column>
-        <el-table-column label="最后数据同步" min-width="170">
+        <el-table-column v-if="isColumnVisible('lastSyncAt')" label="最后数据同步" min-width="170">
           <template #default="{ row }">{{ formatTime(row.lastSyncAt) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
@@ -566,6 +574,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { panelApi } from '@/api/panel'
 import BatchChatMembershipDialog from '@/components/BatchChatMembershipDialog.vue'
 import BatchRecoveryEmailDialog from '@/components/BatchRecoveryEmailDialog.vue'
+import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import { confirmChatMembershipRisk } from '@/utils/riskWarning'
 import type {
   AccountBatchOperationResult,
@@ -581,6 +590,7 @@ import type {
 } from '@/api/types'
 import { formatTime } from '@/utils/format'
 import { accountCategoryTagStyle } from '@/utils/categoryStyle'
+import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
 
 type Row = AccountListItem & { busy?: boolean }
 type SelectionMode = 'select' | 'invert' | 'clear'
@@ -602,6 +612,25 @@ const filters = reactive({
   search: '',
   onlyWaste: false,
 })
+
+const accountColumns: ColumnVisibilityOption[] = [
+  { key: 'phone', label: '手机号' },
+  { key: 'nickname', label: '昵称' },
+  { key: 'username', label: '用户名' },
+  { key: 'remark', label: '备注' },
+  { key: 'userId', label: '用户ID' },
+  { key: 'category', label: '分类' },
+  { key: 'chatCounts', label: '频道/群组' },
+  { key: 'active', label: '状态' },
+  { key: 'telegramStatus', label: 'Telegram 状态' },
+  { key: 'registrationAt', label: '注册时间' },
+  { key: 'lastSyncAt', label: '最后数据同步' },
+]
+
+const { visibleColumnKeys, isColumnVisible, resetColumns, showAllColumns } = usePersistentColumnVisibility(
+  'telegram-panel.accounts.columns',
+  accountColumns,
+)
 
 let filterTimer: number | undefined
 

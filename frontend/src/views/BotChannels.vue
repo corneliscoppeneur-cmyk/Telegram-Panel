@@ -44,29 +44,36 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <ColumnVisibilityMenu
+          v-model="visibleColumnKeys"
+          :columns="botChannelColumns"
+          :disabled="loading"
+          @reset="resetColumns"
+          @show-all="showAllColumns"
+        />
         <el-tag v-if="selectedIds.length" type="primary" effect="plain">已选 {{ selectedIds.length }}</el-tag>
         <span v-else class="muted">频道 ({{ total }})</span>
       </div>
 
       <el-table ref="tableRef" v-loading="loading" :data="rows" stripe row-key="id" @selection-change="onSelectionChange">
         <el-table-column type="selection" width="46" />
-        <el-table-column label="频道名称" min-width="220">
+        <el-table-column v-if="isColumnVisible('title')" label="频道名称" min-width="220">
           <template #default="{ row }"><div class="cell-main">{{ row.title }}</div></template>
         </el-table-column>
-        <el-table-column label="用户名" width="150">
+        <el-table-column v-if="isColumnVisible('username')" label="用户名" width="150">
           <template #default="{ row }">{{ row.username ? `@${row.username}` : '-' }}</template>
         </el-table-column>
-        <el-table-column label="分类" width="130">
+        <el-table-column v-if="isColumnVisible('category')" label="分类" width="130">
           <template #default="{ row }">{{ row.categoryName || '未分类' }}</template>
         </el-table-column>
-        <el-table-column label="频道状态" width="120">
+        <el-table-column v-if="isColumnVisible('status')" label="频道状态" width="120">
           <template #default="{ row }">
             <el-tooltip :content="statusTitle(row)" placement="top">
               <el-tag size="small" :type="statusType(row)">{{ statusText(row) }}</el-tag>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="最后同步" width="180">
+        <el-table-column v-if="isColumnVisible('syncedAt')" label="最后同步" width="180">
           <template #default="{ row }">{{ formatTime(row.syncedAt) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="190" fixed="right">
@@ -450,8 +457,10 @@ import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type { UploadFile } from 'element-plus'
 import { ArrowDown, CircleCheck, Delete, Edit, Link, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { BotBinding, BotChannelListItem, BotChannelRemoteInfo, BotManagementItem, ChatAdmin, NumberPreset, OperationAccount, SimpleCategory, TextPreset } from '@/api/types'
 import { formatTime } from '@/utils/format'
+import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
 
 const route = useRoute()
 const router = useRouter()
@@ -477,6 +486,19 @@ const filters = reactive({
   status: 0,
   search: '',
 })
+
+const botChannelColumns: ColumnVisibilityOption[] = [
+  { key: 'title', label: '频道名称' },
+  { key: 'username', label: '用户名' },
+  { key: 'category', label: '分类' },
+  { key: 'status', label: '频道状态' },
+  { key: 'syncedAt', label: '最后同步' },
+]
+
+const { visibleColumnKeys, isColumnVisible, resetColumns, showAllColumns } = usePersistentColumnVisibility(
+  'telegram-panel.bot-channels.columns',
+  botChannelColumns,
+)
 
 const channelRightMask = {
   changeInfo: 1,

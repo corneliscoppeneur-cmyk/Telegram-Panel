@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="bots-page">
     <el-card shadow="never" class="page-card bot-panel bot-form">
       <template #header><span>新增机器人</span></template>
       <el-form label-width="88px" class="bot-create-form">
@@ -14,18 +14,25 @@
       <div class="toolbar mb-3">
         <div class="toolbar-title">机器人 ({{ rows.length }})</div>
         <div class="toolbar-spacer" />
+        <ColumnVisibilityMenu
+          v-model="visibleColumnKeys"
+          :columns="botColumns"
+          :disabled="loading"
+          @reset="resetColumns"
+          @show-all="showAllColumns"
+        />
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
       <el-table v-loading="loading" :data="rows" stripe>
-        <el-table-column prop="name" label="名称" min-width="180" />
-        <el-table-column label="用户名" min-width="160">
+        <el-table-column v-if="isColumnVisible('name')" prop="name" label="名称" min-width="180" />
+        <el-table-column v-if="isColumnVisible('username')" label="用户名" min-width="160">
           <template #default="{ row }">{{ row.username ? `@${row.username}` : '-' }}</template>
         </el-table-column>
-        <el-table-column prop="channelCount" label="可管理聊天数" width="130" />
-        <el-table-column label="最后同步" width="180">
+        <el-table-column v-if="isColumnVisible('channelCount')" prop="channelCount" label="可管理聊天数" width="130" />
+        <el-table-column v-if="isColumnVisible('lastSyncAt')" label="最后同步" width="180">
           <template #default="{ row }">{{ formatTime(row.lastSyncAt) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="130">
+        <el-table-column v-if="isColumnVisible('active')" label="状态" width="130">
           <template #default="{ row }">
             <el-switch v-model="row.isActive" @change="(v: boolean) => setActive(row, v)" />
             <el-tag :type="row.isActive ? 'success' : 'info'" size="small" class="ml-2">{{ row.isActive ? '启用' : '停用' }}</el-tag>
@@ -61,14 +68,27 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
+import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { BotManagementItem } from '@/api/types'
 import { formatTime } from '@/utils/format'
+import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
 
 const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
 const rows = ref<BotManagementItem[]>([])
 const createForm = reactive({ name: '', token: '', username: '' })
+const botColumns: ColumnVisibilityOption[] = [
+  { key: 'name', label: '名称' },
+  { key: 'username', label: '用户名' },
+  { key: 'channelCount', label: '可管理聊天数' },
+  { key: 'lastSyncAt', label: '最后同步' },
+  { key: 'active', label: '状态' },
+]
+const { visibleColumnKeys, isColumnVisible, resetColumns, showAllColumns } = usePersistentColumnVisibility(
+  'telegram-panel.bots.columns',
+  botColumns,
+)
 const edit = reactive({
   visible: false,
   saving: false,
@@ -149,12 +169,17 @@ onMounted(load)
 </script>
 
 <style scoped>
+.bots-page {
+  width: min(100%, 1160px);
+  margin: 0 auto;
+}
+
 .bot-form {
-  max-width: 680px;
+  width: 100%;
 }
 
 .bot-panel {
-  width: min(100%, 1160px);
+  width: 100%;
 }
 
 .bot-create-form {
