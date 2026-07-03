@@ -441,7 +441,12 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="listDialog.visible" :title="listDialog.title" width="760px">
+    <el-dialog
+      v-model="listDialog.visible"
+      :title="listDialog.title"
+      :width="listDialogWidth"
+      class="account-list-dialog"
+    >
       <el-skeleton v-if="listDialog.loading" :rows="6" animated />
       <template v-else>
         <el-table v-if="listDialog.type === 'memberships'" :data="listDialog.memberships" stripe>
@@ -465,29 +470,31 @@
           </el-table-column>
         </el-table>
 
-        <el-table v-else-if="listDialog.type === 'devices'" :data="listDialog.devices" stripe>
-          <el-table-column label="当前" width="80">
+        <el-table v-else-if="listDialog.type === 'devices'" :data="listDialog.devices" stripe fit class="devices-table">
+          <el-table-column label="当前" width="64" align="center">
             <template #default="{ row }"><el-tag :type="row.current ? 'success' : 'info'" size="small">{{ row.current ? '是' : '否' }}</el-tag></template>
           </el-table-column>
-          <el-table-column label="应用/设备" min-width="200">
+          <el-table-column label="应用/设备" min-width="260">
             <template #default="{ row }">
-              <div>{{ row.title }}</div>
-              <div class="cell-sub">ApiId={{ row.apiId }} {{ row.appVersion || '' }}</div>
+              <div class="device-title">{{ row.title }}</div>
+              <div class="cell-sub device-meta">ApiId={{ row.apiId }} {{ row.appVersion || '' }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="系统" min-width="150">
-            <template #default="{ row }">{{ [row.platform, row.systemVersion].filter(Boolean).join(' ') || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="IP/地区" min-width="160">
+          <el-table-column label="系统" min-width="180">
             <template #default="{ row }">
-              <div>{{ row.ip || '-' }}</div>
-              <div class="cell-sub">{{ [row.country, row.region].filter(Boolean).join(' ') }}</div>
+              <span class="device-text">{{ [row.platform, row.systemVersion].filter(Boolean).join(' ') || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="IP/地区" min-width="220">
+            <template #default="{ row }">
+              <div class="device-text">{{ row.ip || '-' }}</div>
+              <div class="cell-sub device-meta">{{ [row.country, row.region].filter(Boolean).join(' ') }}</div>
             </template>
           </el-table-column>
           <el-table-column label="最近活跃" min-width="170">
             <template #default="{ row }">{{ formatTime(row.lastActiveAtUtc, '-') }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="90">
+          <el-table-column label="操作" width="74" align="center">
             <template #default="{ row }">
               <el-button link type="danger" :disabled="row.current" @click="kickDevice(row)">踢出</el-button>
             </template>
@@ -742,6 +749,11 @@ const listDialog = reactive({
   memberships: [] as AccountChatMembership[],
   devices: [] as TelegramAuthorization[],
   messages: [] as TelegramSystemMessage[],
+})
+const listDialogWidth = computed(() => {
+  if (listDialog.type === 'devices') return 'min(1080px, calc(100vw - 32px))'
+  if (listDialog.type === 'memberships') return 'min(920px, calc(100vw - 32px))'
+  return 'min(760px, calc(100vw - 32px))'
 })
 
 const resultDialog = reactive({
@@ -1645,6 +1657,28 @@ onMounted(async () => {
 .dialog-account {
   margin: 12px 0;
   color: var(--tp-muted);
+}
+
+.account-list-dialog :deep(.el-dialog__body) {
+  overflow-x: hidden;
+}
+
+.devices-table {
+  width: 100%;
+}
+
+.devices-table :deep(.el-table__body-wrapper),
+.devices-table :deep(.el-scrollbar__wrap) {
+  overflow-x: hidden;
+}
+
+.device-title,
+.device-text,
+.device-meta {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .message-item {
