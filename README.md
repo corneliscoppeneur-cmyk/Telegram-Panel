@@ -70,8 +70,12 @@ Access: http://localhost:5000
 
 ## Screenshots
 
-See screenshot/ folder.
+More screenshots: `screenshot/`
+
+| | | |
+|---|---|---|
+| <img src="screenshot/Dashboard.png" width="300" /> | <img src="screenshot/account.png" width="300" /> | <img src="screenshot/Import account.png" width="300" /> |
 
 ## Star History
 
-https://star-history.com/#moeacgx/Telegram-Panel&Date
+[![Star History Chart](https://api.star-history.com/svg?repos=moeacgx/Telegram-Panel&type=Date)](https://star-history.com/#moeacgx/Telegram-Panel&Date)
