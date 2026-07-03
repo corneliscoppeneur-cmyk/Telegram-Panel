@@ -437,6 +437,7 @@ builder.Services.AddScoped<IModuleTaskHandler, UserJoinSubscribeTaskHandler>();
 builder.Services.AddScoped<IModuleTaskHandler, UserChatActiveTaskHandler>();
 builder.Services.AddScoped<IModuleTaskHandler, ChannelGroupPrivateCreateTaskHandler>();
 builder.Services.AddScoped<IModuleTaskHandler, ChannelGroupPublicizeTaskHandler>();
+builder.Services.AddScoped<IModuleTaskHandler, AccountAutoSyncTaskHandler>();
 builder.Services.AddHostedService<BatchTaskBackgroundService>();
 builder.Services.AddHostedService<ScheduledTaskBackgroundService>();
 builder.Services.AddHostedService<AccountDataAutoSyncBackgroundService>();

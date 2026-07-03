@@ -2308,6 +2308,12 @@ public class AccountTelegramToolsService
         if (msg.Contains("AUTH_KEY_UNREGISTERED", StringComparison.OrdinalIgnoreCase))
             return ("Session 失效（AUTH_KEY_UNREGISTERED）", msg);
 
+        if (msg.Contains("session 已失效", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("session已失效", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("账号未登录", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("not logged in", StringComparison.OrdinalIgnoreCase))
+            return ("Session 失效", msg);
+
         if (msg.Contains("AUTH_KEY_DUPLICATED", StringComparison.OrdinalIgnoreCase))
             return ("Session 冲突（AUTH_KEY_DUPLICATED）", "该 Session 可能在其他设备/应用上同时使用，导致密钥冲突。" + Environment.NewLine + msg);
 
