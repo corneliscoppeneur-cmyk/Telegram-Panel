@@ -149,7 +149,7 @@ public class AccountService : IAccountService
 
         try
         {
-            session.Client = CreateStandaloneClient(api.ApiId, api.ApiHash, tempPath, api.ApiHash);
+            session.Client = CreateStandaloneClient(api.ApiId, api.ApiHash, tempPath, api.ApiHash, session.WaitForPassword);
             session.LoginTask = RunQrLoginAsync(session);
 
             for (var i = 0; i < 40; i++)
@@ -213,39 +213,42 @@ public class AccountService : IAccountService
         if (string.IsNullOrWhiteSpace(password))
             return session.ToResult("password", "请输入两步验证密码");
 
-        if (session.Client == null)
-            return new QrLoginResult(false, loginId, "failed", "扫码登录客户端已释放，请重新生成二维码");
+        if (!session.TrySubmitPassword(password))
+            return session.ToResult("password", "当前扫码登录尚未进入二级密码校验状态，请稍后重试");
 
-        try
+        session.Status = "pending";
+        session.Message = "正在验证两步验证密码";
+
+        for (var i = 0; i < 300; i++)
         {
-            var result = await session.Client.Login(password);
-            if (session.Client.User != null)
+            if (session.LoginTask is { IsCompleted: true })
             {
-                session.Account = MapToAccountInfo(loginId, session.Client);
-                session.Status = "authorized";
-                session.Message = "扫码登录成功";
-                await FinalizeQrLoginSessionAsync(session);
-                return session.ToResult();
+                await ApplyQrLoginTaskResultAsync(session);
+                break;
             }
 
-            session.Status = result == "password" ? "password" : "failed";
-            session.Message = result == "password" ? "两步验证密码错误" : $"验证失败：{result}";
-            if (session.Status == "failed")
-                await CleanupQrLoginSessionAsync(loginId, deleteSessionFile: true);
+            if (session.Status is "authorized" or "failed" or "expired")
+                break;
 
-            return session.ToResult();
+            if (session.Status == "password" && session.IsWaitingForPassword)
+                return session.ToResult("password", "两步验证密码错误，请重新输入");
+
+            await Task.Delay(100, CancellationToken.None);
         }
-        catch (Exception ex)
+
+        if (session.Status is "authorized" && session.Account != null)
         {
-            if (LooksLikePasswordRequired(ex))
-                return session.ToResult("password", "请输入两步验证密码");
-
-            session.Status = "failed";
-            session.Message = BuildFriendlyQrLoginError(ex);
-            await CleanupQrLoginSessionAsync(loginId, deleteSessionFile: true);
-            _logger.LogWarning(ex, "Submit QR password failed (loginId={LoginId})", loginId);
+            await FinalizeQrLoginSessionAsync(session);
             return session.ToResult();
         }
+
+        if (session.Status is "failed" or "expired")
+        {
+            await CleanupQrLoginSessionAsync(loginId, deleteSessionFile: true);
+            return session.ToResult();
+        }
+
+        return session.ToResult();
     }
 
     public Task CancelQrLoginAsync(int loginId)
@@ -554,7 +557,12 @@ public class AccountService : IAccountService
         session.KeepTempSession = true;
     }
 
-    private WTelegram.Client CreateStandaloneClient(int apiId, string apiHash, string sessionPath, string sessionKey)
+    private WTelegram.Client CreateStandaloneClient(
+        int apiId,
+        string apiHash,
+        string sessionPath,
+        string sessionKey,
+        Func<string>? passwordProvider = null)
     {
         string Config(string what)
         {
@@ -570,6 +578,7 @@ public class AccountService : IAccountService
                 "api_hash" => apiHash,
                 "session_pathname" => sessionPath,
                 "session_key" => sessionKey,
+                "password" => passwordProvider?.Invoke() ?? null!,
                 "proxy_server" => string.IsNullOrWhiteSpace(proxyServer) ? null! : proxyServer,
                 "proxy_port" => string.IsNullOrWhiteSpace(proxyPort) ? null! : proxyPort,
                 "proxy_username" => string.IsNullOrWhiteSpace(proxyUsername) ? null! : proxyUsername,
@@ -589,6 +598,7 @@ public class AccountService : IAccountService
 
         try
         {
+            session.CancelPasswordWait();
             session.Cancellation.Cancel();
         }
         catch
@@ -722,6 +732,65 @@ public class AccountService : IAccountService
         public DateTimeOffset ExpiresAtUtc { get; set; }
         public AccountInfo? Account { get; set; }
         public bool KeepTempSession { get; set; }
+        private readonly object _passwordLock = new();
+        private TaskCompletionSource<string>? _passwordWaiter;
+
+        public bool IsWaitingForPassword
+        {
+            get
+            {
+                lock (_passwordLock)
+                    return _passwordWaiter != null;
+            }
+        }
+
+        public string WaitForPassword()
+        {
+            TaskCompletionSource<string> waiter;
+            lock (_passwordLock)
+            {
+                Status = "password";
+                Message = "此账号启用了两步验证，请输入密码";
+                ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+                _passwordWaiter = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                waiter = _passwordWaiter;
+            }
+
+            using var _ = Cancellation.Token.Register(() => waiter.TrySetCanceled(Cancellation.Token));
+            try
+            {
+                return waiter.Task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                lock (_passwordLock)
+                {
+                    if (ReferenceEquals(_passwordWaiter, waiter))
+                        _passwordWaiter = null;
+                }
+            }
+        }
+
+        public bool TrySubmitPassword(string password)
+        {
+            lock (_passwordLock)
+            {
+                if (_passwordWaiter == null)
+                    return false;
+
+                _passwordWaiter.TrySetResult(password.Trim());
+                return true;
+            }
+        }
+
+        public void CancelPasswordWait()
+        {
+            lock (_passwordLock)
+            {
+                _passwordWaiter?.TrySetCanceled(Cancellation.Token);
+                _passwordWaiter = null;
+            }
+        }
 
         public QrLoginResult ToResult(string? status = null, string? message = null)
         {

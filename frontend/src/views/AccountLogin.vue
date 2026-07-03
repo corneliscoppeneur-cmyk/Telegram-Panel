@@ -427,6 +427,11 @@ async function handleQrResponse(response: AccountQrLoginResponse) {
     return
   }
 
+  if (response.status === 'pending' && qrLoginId.value > 0 && !qrPolling.value) {
+    startQrPolling()
+    return
+  }
+
   if (response.status === 'failed' || response.status === 'expired') {
     ElMessage.error(response.message || '扫码登录失败')
   }
