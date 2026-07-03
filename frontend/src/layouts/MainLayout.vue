@@ -64,16 +64,16 @@
       >
         <template v-for="item in menuItems" :key="item.index">
           <el-menu-item v-if="!item.children" :index="item.index">
-            <span class="material-icons menu-icon">{{ item.icon }}</span>
+            <MenuIcon :icon="item.icon" />
             <template #title>{{ item.label }}</template>
           </el-menu-item>
           <el-sub-menu v-else :index="item.index">
             <template #title>
-              <span class="material-icons menu-icon">{{ item.icon }}</span>
+              <MenuIcon :icon="item.icon" />
               <span>{{ item.label }}</span>
             </template>
             <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
-              <span class="material-icons menu-icon">{{ child.icon }}</span>
+              <MenuIcon :icon="child.icon" />
               <template #title>{{ child.label }}</template>
             </el-menu-item>
           </el-sub-menu>
@@ -93,16 +93,16 @@
       >
         <template v-for="item in menuItems" :key="item.index">
           <el-menu-item v-if="!item.children" :index="item.index">
-            <span class="material-icons menu-icon">{{ item.icon }}</span>
+            <MenuIcon :icon="item.icon" />
             <template #title>{{ item.label }}</template>
           </el-menu-item>
           <el-sub-menu v-else :index="item.index">
             <template #title>
-              <span class="material-icons menu-icon">{{ item.icon }}</span>
+              <MenuIcon :icon="item.icon" />
               <span>{{ item.label }}</span>
             </template>
             <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
-              <span class="material-icons menu-icon">{{ child.icon }}</span>
+              <MenuIcon :icon="child.icon" />
               <template #title>{{ child.label }}</template>
             </el-menu-item>
           </el-sub-menu>
@@ -205,6 +205,7 @@ import { panelApi } from '@/api/panel'
 import type { ModuleNavItem, VersionInfo } from '@/api/types'
 import { formatTime } from '@/utils/format'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import MenuIcon from '@/components/MenuIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -235,6 +236,17 @@ const canApplyVersionUpdate = computed(() =>
   && versionInfo.value.updateAvailable
   && versionInfo.value.canApply,
 )
+
+const moduleIconFallbacks: Record<string, string> = {
+  'builtin.kick-api': 'person_remove',
+  'fragment-username-checker': 'timer',
+  'pro.bot-monitor-notify': 'notifications_active',
+  'pro.channel-member-gate': 'admin_panel_settings',
+  'pro.channel-push': 'campaign',
+  'pro.external-otp': 'vpn_key',
+  'pro.sync-forward': 'sync_alt',
+  'task.message-report': 'flag',
+}
 
 interface MenuItem {
   index: string
@@ -297,7 +309,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '踢人/封禁',
     href: '/ext/builtin.kick-api/kick',
-    icon: null,
+    icon: moduleIconFallbacks['builtin.kick-api'],
     group: '外部 API',
     order: 10,
     moduleId: 'builtin.kick-api',
@@ -306,7 +318,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '监控频道更新通知',
     href: '/ext/pro.bot-monitor-notify/settings',
-    icon: null,
+    icon: moduleIconFallbacks['pro.bot-monitor-notify'],
     group: '用户模块',
     order: 100,
     moduleId: 'pro.bot-monitor-notify',
@@ -315,7 +327,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '频道同步转发',
     href: '/ext/pro.sync-forward/settings',
-    icon: null,
+    icon: moduleIconFallbacks['pro.sync-forward'],
     group: '用户模块',
     order: 120,
     moduleId: 'pro.sync-forward',
@@ -324,7 +336,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '频道成员准入与联动踢出',
     href: '/ext/pro.channel-member-gate/settings',
-    icon: null,
+    icon: moduleIconFallbacks['pro.channel-member-gate'],
     group: '用户模块',
     order: 130,
     moduleId: 'pro.channel-member-gate',
@@ -333,7 +345,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '频道广告推送',
     href: '/ext/pro.channel-push/settings',
-    icon: null,
+    icon: moduleIconFallbacks['pro.channel-push'],
     group: '扩展模块',
     order: 200,
     moduleId: 'pro.channel-push',
@@ -342,7 +354,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: '协议号转API',
     href: '/ext/pro.external-otp/protocol-api',
-    icon: null,
+    icon: moduleIconFallbacks['pro.external-otp'],
     group: '协议号转API',
     order: 110,
     moduleId: 'pro.external-otp',
@@ -351,7 +363,7 @@ const fallbackModuleNavItems: ModuleNavItem[] = [
   {
     title: 'Fragment 用户名',
     href: '/ext/fragment-username-checker/main',
-    icon: null,
+    icon: moduleIconFallbacks['fragment-username-checker'],
     group: '工具',
     order: 100,
     moduleId: 'fragment-username-checker',
@@ -378,7 +390,7 @@ const menuItems = computed<MenuItem[]>(() => {
     .map((item) => ({
       index: normalizeModuleHref(item.href),
       label: item.title,
-      icon: 'extension',
+      icon: resolveModuleIcon(item),
     }))
 
   if (extensionChildren.length > 0) {
@@ -451,6 +463,10 @@ function normalizeModuleHref(href: string) {
   if (href.startsWith('/ui/')) return href.slice(3) || '/'
   if (href.startsWith('/')) return href
   return `/${href}`
+}
+
+function resolveModuleIcon(item: ModuleNavItem) {
+  return (item.icon || '').trim() || moduleIconFallbacks[item.moduleId] || 'extension'
 }
 
 async function loadModuleNav() {

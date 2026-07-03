@@ -11,12 +11,6 @@
           <el-form-item label="分类名称">
             <el-input v-model="createForm.name" />
           </el-form-item>
-          <el-form-item label="分类文字颜色">
-            <div class="color-row">
-              <el-color-picker v-model="createForm.color" />
-              <el-input v-model="createForm.color" />
-            </div>
-          </el-form-item>
           <el-form-item label="描述">
             <el-input v-model="createForm.description" type="textarea" :rows="3" />
           </el-form-item>
@@ -43,15 +37,10 @@
                 <el-tag
                   effect="plain"
                   class="category-name-tag"
-                  :style="accountCategoryTextStyle(row)"
+                  :style="accountCategoryTagStyle(row)"
                 >
                   {{ row.name }}
                 </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="颜色" width="90">
-              <template #default="{ row }">
-                <span class="text-color-sample" :style="accountCategoryTextStyle(row)">A</span>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="180">
@@ -120,12 +109,6 @@
         <el-form-item label="分类名称">
           <el-input v-model="editDialog.form.name" />
         </el-form-item>
-        <el-form-item label="分类文字颜色">
-          <div class="color-row">
-            <el-color-picker v-model="editDialog.form.color" />
-            <el-input v-model="editDialog.form.color" />
-          </div>
-        </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="editDialog.form.description" type="textarea" :rows="3" />
         </el-form-item>
@@ -150,6 +133,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Edit, Refresh } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import type { AccountCategory, AccountListItem } from '@/api/types'
+import { accountCategoryTagStyle } from '@/utils/categoryStyle'
 
 const categories = ref<AccountCategory[]>([])
 const accounts = ref<AccountListItem[]>([])
@@ -163,7 +147,6 @@ const accountTableRef = ref<TableInstance>()
 
 const createForm = reactive({
   name: '',
-  color: '#1976d2',
   description: '',
   excludeFromOperations: false,
 })
@@ -174,7 +157,6 @@ const editDialog = reactive({
   id: 0,
   form: {
     name: '',
-    color: '#9E9E9E',
     description: '',
     excludeFromOperations: false,
   },
@@ -230,13 +212,12 @@ async function createCategory() {
   try {
     const saved = await panelApi.createAccountCategory({
       name: createForm.name,
-      color: createForm.color,
+      color: null,
       description: createForm.description,
       excludeFromOperations: createForm.excludeFromOperations,
     })
     ElMessage.success(`分类 "${saved.name}" 添加成功`)
     createForm.name = ''
-    createForm.color = '#1976d2'
     createForm.description = ''
     createForm.excludeFromOperations = false
     await loadAll()
@@ -248,22 +229,9 @@ async function createCategory() {
 function openEdit(category: AccountCategory) {
   editDialog.id = category.id
   editDialog.form.name = category.name
-  editDialog.form.color = category.color || '#9E9E9E'
   editDialog.form.description = category.description || ''
   editDialog.form.excludeFromOperations = category.excludeFromOperations
   editDialog.visible = true
-}
-
-function accountCategoryTextStyle(category: AccountCategory) {
-  const color = category.color || '#9E9E9E'
-  return {
-    color,
-    borderColor: color,
-    backgroundColor: 'transparent',
-    '--el-tag-text-color': color,
-    '--el-tag-border-color': color,
-    '--el-tag-bg-color': 'transparent',
-  }
 }
 
 async function saveEdit() {
@@ -271,7 +239,7 @@ async function saveEdit() {
   try {
     await panelApi.updateAccountCategory(editDialog.id, {
       name: editDialog.form.name,
-      color: editDialog.form.color,
+      color: null,
       description: editDialog.form.description,
       excludeFromOperations: editDialog.form.excludeFromOperations,
     })
@@ -343,28 +311,8 @@ onMounted(loadAll)
   width: 100%;
 }
 
-.color-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-}
-
 .category-name-tag {
-  background: transparent;
-}
-
-.text-color-sample {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 4px;
-  border: 1px solid var(--tp-border);
-  background: transparent;
-  font-weight: 700;
+  border-radius: 999px;
 }
 
 @media (max-width: 980px) {

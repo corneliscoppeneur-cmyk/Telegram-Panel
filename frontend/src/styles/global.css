@@ -219,12 +219,22 @@ body,
 }
 
 .menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
   width: 24px;
+  height: 24px;
   margin-right: 16px;
   color: var(--tp-menu-icon);
   font-size: 20px;
   line-height: 1;
   text-align: center;
+}
+
+.svg-menu-icon {
+  padding: 2px;
+  box-sizing: border-box;
 }
 
 .menu .el-menu-item.is-active .menu-icon,

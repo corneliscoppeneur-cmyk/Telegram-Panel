@@ -580,6 +580,7 @@ import type {
   TelegramSystemMessage,
 } from '@/api/types'
 import { formatTime } from '@/utils/format'
+import { accountCategoryTagStyle } from '@/utils/categoryStyle'
 
 type Row = AccountListItem & { busy?: boolean }
 type SelectionMode = 'select' | 'invert' | 'clear'
@@ -626,18 +627,6 @@ const selectionIcon = computed<Component>(() => {
   if (selectionMode.value === 'clear') return Delete
   return Select
 })
-
-function accountCategoryTagStyle(category: AccountCategory) {
-  const color = category.color || '#9E9E9E'
-  return {
-    color,
-    borderColor: color,
-    backgroundColor: 'transparent',
-    '--el-tag-text-color': color,
-    '--el-tag-border-color': color,
-    '--el-tag-bg-color': 'transparent',
-  }
-}
 
 const details = reactive({
   visible: false,
@@ -1601,7 +1590,7 @@ onMounted(async () => {
 }
 
 .account-category-tag {
-  background: transparent;
+  border-radius: 999px;
 }
 
 .row-actions {
