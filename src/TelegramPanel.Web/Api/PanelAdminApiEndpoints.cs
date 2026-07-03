@@ -4398,8 +4398,12 @@ public static class PanelAdminApiEndpoints
             registered != null,
             api.Enabled,
             api.ApiKey,
-            api.Config ?? new JsonObject());
+            api.Config ?? new JsonObject(),
+            api.Kick == null ? null : ToDto(api.Kick));
     }
+
+    private static KickApiDto ToDto(KickApiDefinition kick) =>
+        new(kick.BotId, kick.UseAllChats, kick.ChatIds ?? new List<long>(), kick.PermanentBanDefault);
 
     private static BotOptionDto ToDto(Bot bot) =>
         new(bot.Id, bot.Name, bot.Username, bot.IsActive);
@@ -4575,6 +4579,12 @@ public static class PanelAdminApiEndpoints
             Config = request.Config ?? new JsonObject()
         };
 
+        if (request.Kick != null || string.Equals(api.Type, "kick", StringComparison.OrdinalIgnoreCase))
+        {
+            api.Kick = BuildKickApiDefinition(request.Kick, api.Config);
+            api.Config = BuildKickConfig(api.Kick);
+        }
+
         return api;
     }
 
@@ -4665,6 +4675,89 @@ public static class PanelAdminApiEndpoints
         api.Type = (api.Type ?? string.Empty).Trim();
         api.ApiKey = (api.ApiKey ?? string.Empty).Trim();
         api.Config ??= new JsonObject();
+        if (string.Equals(api.Type, "kick", StringComparison.OrdinalIgnoreCase))
+        {
+            api.Kick = BuildKickApiDefinition(api.Kick == null ? null : ToDto(api.Kick), api.Config);
+            api.Config = BuildKickConfig(api.Kick);
+        }
+    }
+
+    private static KickApiDefinition BuildKickApiDefinition(KickApiDto? dto, JsonObject? config)
+    {
+        var kick = new KickApiDefinition
+        {
+            BotId = dto?.BotId ?? ReadInt(config, "botId", "bot_id"),
+            UseAllChats = dto?.UseAllChats ?? ReadBool(config, true, "useAllChats", "use_all_chats"),
+            ChatIds = dto?.ChatIds?
+                .Where(x => x != 0)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList() ?? ReadLongList(config, "chatIds", "chat_ids"),
+            PermanentBanDefault = dto?.PermanentBanDefault ?? ReadBool(config, false, "permanentBanDefault", "permanent_ban_default")
+        };
+
+        if (kick.BotId == 0)
+        {
+            kick.UseAllChats = true;
+            kick.ChatIds.Clear();
+        }
+
+        return kick;
+    }
+
+    private static JsonObject BuildKickConfig(KickApiDefinition kick)
+    {
+        var chatIds = new JsonArray();
+        foreach (var chatId in kick.ChatIds)
+            chatIds.Add(chatId);
+
+        return new JsonObject
+        {
+            ["botId"] = kick.BotId,
+            ["useAllChats"] = kick.UseAllChats,
+            ["chatIds"] = chatIds,
+            ["permanentBanDefault"] = kick.PermanentBanDefault
+        };
+    }
+
+    private static int ReadInt(JsonObject? obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (obj?[name] is JsonValue value && value.TryGetValue<int>(out var intValue))
+                return intValue;
+        }
+
+        return 0;
+    }
+
+    private static bool ReadBool(JsonObject? obj, bool fallback, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (obj?[name] is JsonValue value && value.TryGetValue<bool>(out var boolValue))
+                return boolValue;
+        }
+
+        return fallback;
+    }
+
+    private static List<long> ReadLongList(JsonObject? obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (obj?[name] is not JsonArray arr)
+                continue;
+
+            return arr
+                .Select(x => x is JsonValue value && value.TryGetValue<long>(out var longValue) ? longValue : 0)
+                .Where(x => x != 0)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
+        }
+
+        return new List<long>();
     }
 
     private static string GenerateApiKey()
@@ -5955,7 +6048,8 @@ public sealed record ExternalApiDefinitionDto(
     bool TypeAvailable,
     bool Enabled,
     string ApiKey,
-    JsonObject Config);
+    JsonObject Config,
+    KickApiDto? Kick);
 
 public sealed record ExternalApiTypeDto(
     string Type,
@@ -6025,7 +6119,14 @@ public sealed record SaveExternalApiRequestDto(
     string? Type,
     bool Enabled,
     string? ApiKey,
-    JsonObject? Config);
+    JsonObject? Config,
+    KickApiDto? Kick);
+
+public sealed record KickApiDto(
+    int BotId,
+    bool UseAllChats,
+    IReadOnlyList<long> ChatIds,
+    bool PermanentBanDefault);
 
 public sealed record BotOptionDto(
     int Id,
