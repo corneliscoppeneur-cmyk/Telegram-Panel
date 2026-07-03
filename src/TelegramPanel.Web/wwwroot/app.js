@@ -1,10 +1,53 @@
 window.telegramPanel = window.telegramPanel || {};
 
+window.telegramPanel.notifyLegacyHost = (kind, message) => {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        source: "telegram-panel",
+        type: "legacy-module-event",
+        kind: String(kind || "info"),
+        message: message ? String(message) : "",
+        path: window.location.pathname,
+        search: window.location.search,
+      }, window.location.origin);
+    }
+  } catch (_) {
+    // iframe 父窗口通知失败不影响旧页面自身运行。
+  }
+};
+
 window.telegramPanel.showBlazorError = (message) => {
   const ui = document.getElementById("blazor-error-ui");
   const text = document.getElementById("blazor-error-message");
   if (text && message) text.textContent = String(message);
   if (ui) ui.style.display = "block";
+  window.telegramPanel.notifyLegacyHost("blazor-error", message || "页面运行出错。");
+};
+
+window.telegramPanel.watchBlazorErrorUi = () => {
+  const ui = document.getElementById("blazor-error-ui");
+  if (!ui || ui.dataset.telegramPanelWatched === "1") return;
+  ui.dataset.telegramPanelWatched = "1";
+
+  const notifyIfVisible = () => {
+    const style = window.getComputedStyle(ui);
+    if (style.display !== "none" && style.visibility !== "hidden") {
+      const text = document.getElementById("blazor-error-message");
+      window.telegramPanel.notifyLegacyHost(
+        "blazor-error",
+        text && text.textContent ? text.textContent : "页面运行出错。"
+      );
+    }
+  };
+
+  try {
+    const observer = new MutationObserver(notifyIfVisible);
+    observer.observe(ui, { attributes: true, attributeFilter: ["style", "class"] });
+    notifyIfVisible();
+  } catch (_) {
+    // MutationObserver 不可用时忽略；showBlazorError 仍会通知。
+  }
 };
 
 window.telegramPanel.startBlazor = async () => {
@@ -22,6 +65,7 @@ window.telegramPanel.startBlazor = async () => {
         },
       },
     });
+    window.telegramPanel.notifyLegacyHost("blazor-started", "");
   } catch (error) {
     console.error(error);
     const message = error && error.message
@@ -30,6 +74,10 @@ window.telegramPanel.startBlazor = async () => {
     window.telegramPanel.showBlazorError(message);
   }
 };
+
+window.addEventListener("DOMContentLoaded", () => {
+  window.telegramPanel.watchBlazorErrorUi();
+});
 
 window.telegramPanel.copyText = async (text) => {
   if (text === null || text === undefined) return;
