@@ -48,6 +48,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                 host,
                 accountManagement,
                 accountTools,
+                templateRendering,
                 aiOptions,
                 cancellationToken);
 
@@ -593,6 +594,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         IModuleTaskExecutionHost host,
         AccountManagementService accountManagement,
         AccountTelegramToolsService accountTools,
+        TemplateRenderingService templateRendering,
         IOptionsMonitor<AiOpenAiOptions> aiOptions,
         CancellationToken cancellationToken)
     {
@@ -602,6 +604,14 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
             if (!settings.TryValidateForTask(config.AiModel, out var aiError))
                 return PrepareAccountSlotsResult.Failed($"AI 验证已启用，但全局 AI 配置无效：{aiError}");
         }
+
+        var expandedTargetsResult = await ExpandTargetsAsync(config.Targets, templateRendering, cancellationToken);
+        if (!expandedTargetsResult.Success)
+            return PrepareAccountSlotsResult.Failed(expandedTargetsResult.Error ?? "目标群组/频道配置无效");
+
+        var targets = expandedTargetsResult.Targets;
+        if (targets.Count == 0)
+            return PrepareAccountSlotsResult.Failed("任务缺少目标群组/频道");
 
         var selectedCategoryIds = NormalizeSelectedCategoryIds(config).ToHashSet();
         var allAccounts = (await accountManagement.GetAllAccountsAsync())
@@ -621,7 +631,7 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
                 return PrepareAccountSlotsResult.CanceledResult();
 
             var slot = new AccountSlot(account);
-            foreach (var rawTarget in config.Targets)
+            foreach (var rawTarget in targets)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!await host.IsStillRunningAsync(cancellationToken))
@@ -644,6 +654,52 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
         return accountSlots.Count == 0
             ? PrepareAccountSlotsResult.Failed("没有可用的账号-目标组合（请确认账号已加入目标群组/频道）")
             : PrepareAccountSlotsResult.Ok(accountSlots);
+    }
+
+    private static async Task<ExpandTargetsResult> ExpandTargetsAsync(
+        IEnumerable<string>? rawTargets,
+        TemplateRenderingService templateRendering,
+        CancellationToken cancellationToken)
+    {
+        var targets = new List<string>();
+        foreach (var raw in rawTargets ?? Array.Empty<string>())
+        {
+            var value = (raw ?? string.Empty).Trim();
+            if (value.Length == 0)
+                continue;
+
+            if (templateRendering.ExtractSingleTokenName(value) is { Length: > 0 })
+            {
+                IReadOnlyList<string> dictionaryValues;
+                try
+                {
+                    dictionaryValues = await templateRendering.ResolveTextDictionaryValuesAsync(value, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    return ExpandTargetsResult.Failed($"目标字典解析失败：{ex.Message}");
+                }
+
+                targets.AddRange(dictionaryValues.SelectMany(SplitTargetValues));
+                continue;
+            }
+
+            targets.AddRange(SplitTargetValues(value));
+        }
+
+        targets = targets
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return ExpandTargetsResult.Ok(targets);
+    }
+
+    private static IEnumerable<string> SplitTargetValues(string value)
+    {
+        return (value ?? string.Empty)
+            .Split(new[] { "\r\n", "\n", "\r", ",", " " }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private static bool IsPersistent(UserChatActiveTaskConfig config) => config.MaxMessages <= 0;
@@ -939,6 +995,18 @@ public sealed class UserChatActiveTaskHandler : IModuleTaskHandler
 
         public static PrepareAccountSlotsResult CanceledResult() =>
             new(false, true, null, new List<AccountSlot>());
+    }
+
+    private sealed record ExpandTargetsResult(
+        bool Success,
+        string? Error,
+        List<string> Targets)
+    {
+        public static ExpandTargetsResult Ok(List<string> targets) =>
+            new(true, null, targets);
+
+        public static ExpandTargetsResult Failed(string error) =>
+            new(false, error, new List<string>());
     }
 
     private static bool IsVerificationTimeout(string? error)

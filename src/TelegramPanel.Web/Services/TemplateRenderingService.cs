@@ -50,6 +50,17 @@ public sealed class TemplateRenderingService
         }
     }
 
+    public async Task ValidateTextDictionaryTokenAsync(string? tokenExpression, CancellationToken cancellationToken = default)
+    {
+        var tokenName = ExtractSingleTokenName(tokenExpression)
+            ?? throw new InvalidOperationException("目标字典必须是单个文本字典变量，例如 {groups}");
+
+        if (string.Equals(tokenName, "time", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("目标字典不能使用内置时间变量 {time}");
+
+        await EnsureDictionaryAvailableAsync(tokenName, DataDictionaryTypes.Text, cancellationToken);
+    }
+
     public async Task ValidateImageTemplateAsync(string? tokenExpression, CancellationToken cancellationToken = default)
     {
         var tokenName = ExtractSingleTokenName(tokenExpression)
@@ -82,6 +93,37 @@ public sealed class TemplateRenderingService
 
         builder.Append(template, lastIndex, template.Length - lastIndex);
         return builder.ToString();
+    }
+
+    public async Task<IReadOnlyList<string>> ResolveTextDictionaryValuesAsync(string tokenExpression, CancellationToken cancellationToken = default)
+    {
+        var tokenName = ExtractSingleTokenName(tokenExpression)
+            ?? throw new InvalidOperationException("目标字典必须是单个文本字典变量，例如 {groups}");
+
+        if (string.Equals(tokenName, "time", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("目标字典不能使用内置时间变量 {time}");
+
+        var dictionary = await _dataDictionaryService.GetByNameAsync(tokenName, cancellationToken)
+            ?? throw new InvalidOperationException($"未找到变量：{{{tokenName}}}");
+
+        if (!dictionary.IsEnabled)
+            throw new InvalidOperationException($"变量已停用：{{{tokenName}}}");
+
+        if (!string.Equals(dictionary.Type, DataDictionaryTypes.Text, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"变量类型不匹配：{{{tokenName}}} 需要使用文本字典");
+
+        var values = dictionary.Items
+            .Where(x => x.IsEnabled)
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.Id)
+            .Select(x => (x.TextValue ?? string.Empty).Trim())
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        if (values.Count == 0)
+            throw new InvalidOperationException($"变量没有可用内容：{{{tokenName}}}");
+
+        return values;
     }
 
     public async Task<StoredImageAssetInfo> ResolveImageTemplateAsync(string tokenExpression, CancellationToken cancellationToken = default)

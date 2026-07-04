@@ -12,7 +12,7 @@
 <MudStack Spacing="2">
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
         持续活跃任务会在后台循环执行并按间隔发送内容。MaxMessages=0 表示持续运行，直到你在任务中心手动取消。
-        词典消息现在支持 <code>{time}</code> 和文本字典变量；任务仍会先按“随机 / 队列”模式选中一行，再解析其中变量后发送。
+        目标支持固定链接和文本字典变量；词典消息支持 <code>{time}</code> 和文本字典变量。
     </MudAlert>
 
     @if (loading)
@@ -41,7 +41,7 @@
                       Variant="Variant.Outlined"
                       Lines="5"
                       Immediate="true"
-                      HelperText="支持：用户名（可带 at 前缀）、https://t.me/xxx、频道ID（如 -1001234567890 或 1234567890），如私密群组无法复制链接可登录 Telegram Web 面板打开群组聊天界面查看链接，数字就是 ID" />
+                      HelperText="支持固定目标或文本字典变量，例如 {groups}。字典内容可放 t.me 链接、at 用户名、频道ID；每行、空格或逗号分隔均可。" />
 
         <MudTextField @bind-Value="dictionaryText" @bind-Value:after="OnInputsChanged"
                       Label="文字词典（每行一个）"
@@ -426,6 +426,22 @@
         {
             await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "请至少填写一个目标群组/频道"));
             return;
+        }
+
+        foreach (var target in targets)
+        {
+            if (TemplateRendering.ExtractSingleTokenName(target) is not { Length: > 0 })
+                continue;
+
+            try
+            {
+                await TemplateRendering.ValidateTextDictionaryTokenAsync(target);
+            }
+            catch (Exception ex)
+            {
+                await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, $"目标字典无效：{ex.Message}"));
+                return;
+            }
         }
 
         var imageDictionaryToken = string.IsNullOrWhiteSpace(selectedImageDictionaryName)
