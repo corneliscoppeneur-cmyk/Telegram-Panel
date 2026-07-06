@@ -257,13 +257,7 @@ public class GroupService : IGroupService
         if (string.IsNullOrWhiteSpace(message))
             return false;
 
-        var idx = message.IndexOf("FLOOD_WAIT_", StringComparison.OrdinalIgnoreCase);
-        if (idx < 0)
-            return false;
-
-        var tail = message.Substring(idx + "FLOOD_WAIT_".Length);
-        var num = new string(tail.TakeWhile(char.IsDigit).ToArray());
-        if (!int.TryParse(num, out seconds))
+        if (!TelegramRpcErrorTranslator.TryGetRpcWaitSeconds(message, "FLOOD_WAIT_", out seconds))
             return false;
 
         if (seconds < 1) seconds = 1;
@@ -748,8 +742,9 @@ public class GroupService : IGroupService
             return "目标用户不在该群组内，请先邀请目标用户并设为管理员后再转让。";
         if (text.Contains("USER_NOT_MUTUAL_CONTACT", StringComparison.OrdinalIgnoreCase))
             return "目标用户隐私限制导致无法转让，请先互加联系人或让目标用户加入群组。";
-        if (text.Contains("FLOOD_WAIT", StringComparison.OrdinalIgnoreCase))
-            return $"Telegram 风控限制：{text}";
+        var waitError = TelegramRpcErrorTranslator.TranslateOwnershipTransferWaitError(text);
+        if (waitError != null)
+            return waitError;
 
         return string.IsNullOrWhiteSpace(text) ? "所有权转让失败" : text;
     }

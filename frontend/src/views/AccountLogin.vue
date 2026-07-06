@@ -57,7 +57,19 @@
               <el-tag :type="qrTagType" effect="plain">{{ qrStatusText }}</el-tag>
               <div v-if="qrExpiresText" class="qr-expires">过期时间：{{ qrExpiresText }}</div>
 
-              <el-form v-if="qrStatus === 'password'" label-position="top" class="qr-password-form">
+              <el-form
+                v-if="qrStatus === 'password'"
+                label-position="top"
+                class="qr-password-form"
+                autocomplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+              >
+                <div class="autofill-decoy" aria-hidden="true">
+                  <input tabindex="-1" autocomplete="username" name="username" type="text" />
+                  <input tabindex="-1" autocomplete="current-password" name="password" type="password" />
+                </div>
                 <el-form-item label="系统账号已保存二级密码">
                   <el-select
                     v-model="qrStoredAccountId"
@@ -87,7 +99,18 @@
                   class="mb-3"
                 />
                 <el-form-item label="两步验证密码">
-                  <el-input v-model="qrPassword" type="password" show-password @keyup.enter="submitQrPassword" />
+                  <el-input
+                    v-model="qrPassword"
+                    type="password"
+                    show-password
+                    name="telegram-qr-2fa"
+                    autocomplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
+                    data-form-type="other"
+                    @keyup.enter="submitQrPassword"
+                  />
                 </el-form-item>
                 <el-checkbox v-model="saveQrPasswordToSystem">登录成功后保存到系统</el-checkbox>
                 <div class="muted">默认不保存。重要账号建议关闭，避免二级密码长期落库。</div>
@@ -151,12 +174,29 @@
 
         <div v-else-if="currentStep === 'password'" class="step-body">
           <el-alert :title="phonePasswordAlertTitle" :type="phonePasswordSource ? 'success' : 'info'" :closable="false" show-icon />
-          <el-form label-position="top" class="mt-4">
+          <el-form
+            label-position="top"
+            class="mt-4"
+            autocomplete="off"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
+          >
+            <div class="autofill-decoy" aria-hidden="true">
+              <input tabindex="-1" autocomplete="username" name="username" type="text" />
+              <input tabindex="-1" autocomplete="current-password" name="password" type="password" />
+            </div>
             <el-form-item label="两步验证密码">
               <el-input
                 v-model="password"
                 type="password"
                 show-password
+                name="telegram-phone-2fa"
+                autocomplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+                data-form-type="other"
                 :placeholder="phonePasswordLoading ? '正在查询系统已保存的二级密码' : '请输入两步验证密码'"
                 @keyup.enter="next"
               />
@@ -700,6 +740,24 @@ onMounted(loadTelegramApiStatus)
   display: flex;
   justify-content: center;
   align-items: flex-start;
+}
+
+.autofill-decoy {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.autofill-decoy input {
+  width: 1px;
+  height: 1px;
+  border: 0;
+  padding: 0;
 }
 
 .login-flow-card {

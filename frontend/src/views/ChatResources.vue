@@ -294,7 +294,11 @@
     </el-dialog>
 
     <el-dialog v-model="transferOwner.visible" title="转让所有权" width="620px" destroy-on-close>
-      <el-form label-position="top">
+      <el-form label-position="top" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
+        <div class="autofill-decoy" aria-hidden="true">
+          <input tabindex="-1" autocomplete="username" name="username" type="text" />
+          <input tabindex="-1" autocomplete="current-password" name="password" type="password" />
+        </div>
         <el-alert
           :title="`此操作会把${kindName}创建者转让给目标用户。成功后只能由新的所有者继续管理，无法在面板内撤销。`"
           type="error"
@@ -323,13 +327,28 @@
           <div class="muted mt-2">选择系统账号会自动填入该账号的用户名，并在成功后更新本地创建者记录。</div>
         </el-form-item>
         <el-form-item label="新所有者用户名">
-          <el-input v-model="transferOwner.target" placeholder="@username 或 username" />
+          <el-input
+            v-model="transferOwner.target"
+            name="telegram-transfer-target"
+            autocomplete="off"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
+            data-form-type="other"
+            placeholder="@username 或 username"
+          />
         </el-form-item>
         <el-form-item label="当前创建者账号二级密码">
           <el-input
             v-model="transferOwner.password"
             type="password"
             show-password
+            name="telegram-transfer-2fa"
+            autocomplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
+            data-form-type="other"
             :placeholder="transferOwner.passwordLoading ? '正在读取系统已保存的二级密码' : '若系统已保存，会自动带入；可手动修改'"
           />
           <div class="muted mt-2">留空时后端也会尝试使用该执行账号在系统中保存的二级密码。</div>
@@ -1430,6 +1449,24 @@ onMounted(async () => {
 <style scoped>
 .resource-filter {
   width: 240px;
+}
+
+.autofill-decoy {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.autofill-decoy input {
+  width: 1px;
+  height: 1px;
+  border: 0;
+  padding: 0;
 }
 
 .toolbar-spacer {
