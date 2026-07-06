@@ -15,7 +15,7 @@ const label = computed(() => {
     case 'completed': return '已完成'
     case 'failed': return '失败'
     case 'canceled': return '已取消'
-    case 'enabled': return '启用'
+    case 'enabled': return '启用中'
     default: return props.status || '-'
   }
 })

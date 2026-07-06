@@ -52,16 +52,7 @@ const pageKey = computed(() => String(route.params.pageKey || ''))
 const title = computed(() => (route.meta.title as string) || '扩展模块')
 const nativePageUrl = computed(() => `/ext/${encodeURIComponent(moduleId.value)}/${encodeURIComponent(pageKey.value)}?legacy=1&embed=1`)
 const standalonePageUrl = computed(() => `/ext/${encodeURIComponent(moduleId.value)}/${encodeURIComponent(pageKey.value)}?legacy=1`)
-const defaultStandaloneModuleIds = new Set([
-  'builtin.kick-api',
-  'pro.bot-monitor-notify',
-  'pro.channel-member-gate',
-  'pro.channel-push',
-  'pro.external-otp',
-  'pro.sync-forward',
-])
-const shouldDefaultStandalone = computed(() => defaultStandaloneModuleIds.has(moduleId.value))
-const fallbackMode = ref(shouldDefaultStandalone.value)
+const fallbackMode = ref(false)
 const frameKey = ref(0)
 
 function openStandalone() {
@@ -74,7 +65,7 @@ function retryEmbed() {
 }
 
 async function redirectStandaloneIfNeeded() {
-  if (!shouldDefaultStandalone.value) return
+  if (!fallbackMode.value) return
   await nextTick()
   window.location.replace(standalonePageUrl.value)
 }
@@ -88,14 +79,12 @@ function onLegacyModuleMessage(event: MessageEvent) {
 }
 
 watch([moduleId, pageKey], () => {
-  fallbackMode.value = shouldDefaultStandalone.value
+  fallbackMode.value = false
   frameKey.value += 1
-  void redirectStandaloneIfNeeded()
 })
 
 onMounted(() => {
   window.addEventListener('message', onLegacyModuleMessage)
-  void redirectStandaloneIfNeeded()
 })
 onUnmounted(() => window.removeEventListener('message', onLegacyModuleMessage))
 </script>

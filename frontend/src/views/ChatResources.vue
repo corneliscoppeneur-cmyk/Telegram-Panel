@@ -115,7 +115,8 @@
                   <el-dropdown-item v-if="kind === 'channel'" @click="openChannelKick([row.id])">踢人</el-dropdown-item>
                   <el-dropdown-item @click="showSystemAccounts(row)">本系统账号</el-dropdown-item>
                   <el-dropdown-item @click="copyLink(row)">复制链接</el-dropdown-item>
-                  <el-dropdown-item divided @click="leaveOne(row)">退出{{ kindName }}</el-dropdown-item>
+                  <el-dropdown-item divided @click="openTransferOwner(row)">转让所有权</el-dropdown-item>
+                  <el-dropdown-item @click="leaveOne(row)">退出{{ kindName }}</el-dropdown-item>
                   <el-dropdown-item @click="disbandOne(row)">解散{{ kindName }}</el-dropdown-item>
                   <el-dropdown-item @click="deleteOne(row)">删除{{ kindName }}</el-dropdown-item>
                 </el-dropdown-menu>
@@ -289,6 +290,54 @@
       <template #footer>
         <el-button @click="categoryDialog.visible = false">取消</el-button>
         <el-button type="primary" @click="saveCategoryChange">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="transferOwner.visible" title="转让所有权" width="620px" destroy-on-close>
+      <el-form label-position="top">
+        <el-alert
+          :title="`此操作会把${kindName}创建者转让给目标用户。成功后只能由新的所有者继续管理，无法在面板内撤销。`"
+          type="error"
+          :closable="false"
+          show-icon
+          class="mb-3"
+        />
+        <el-form-item label="当前创建者账号">
+          <el-select v-model="transferOwner.accountId" class="full" :disabled="!!transferOwner.row?.creatorAccountId" @change="onTransferExecutorChanged">
+            <el-option v-if="transferOwner.row?.creatorAccountId" :label="transferExecutorLabel" :value="transferOwner.row.creatorAccountId" />
+            <el-option v-else label="请选择当前创建者账号" :value="0" />
+            <el-option v-for="account in accounts" :key="account.id" :label="accountLabel(account)" :value="account.id" />
+          </el-select>
+          <div class="muted mt-2">优先使用本地记录的创建者账号；没有创建者记录时需要手动选择真实创建者。</div>
+        </el-form-item>
+        <el-form-item label="新所有者（本系统账号）">
+          <el-select v-model="transferOwner.targetAccountId" class="full" filterable clearable placeholder="可选：选择系统账号" @change="onTransferTargetAccountChanged">
+            <el-option
+              v-for="account in accounts"
+              :key="account.id"
+              :disabled="!account.username"
+              :label="accountLabel(account)"
+              :value="account.id"
+            />
+          </el-select>
+          <div class="muted mt-2">选择系统账号会自动填入该账号的用户名，并在成功后更新本地创建者记录。</div>
+        </el-form-item>
+        <el-form-item label="新所有者用户名">
+          <el-input v-model="transferOwner.target" placeholder="@username 或 username" />
+        </el-form-item>
+        <el-form-item label="当前创建者账号二级密码">
+          <el-input
+            v-model="transferOwner.password"
+            type="password"
+            show-password
+            :placeholder="transferOwner.passwordLoading ? '正在读取系统已保存的二级密码' : '若系统已保存，会自动带入；可手动修改'"
+          />
+          <div class="muted mt-2">留空时后端也会尝试使用该执行账号在系统中保存的二级密码。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="transferOwner.running" @click="transferOwner.visible = false">取消</el-button>
+        <el-button type="danger" :loading="transferOwner.running" @click="submitTransferOwner">确认转让</el-button>
       </template>
     </el-dialog>
 
@@ -503,6 +552,16 @@ const categoryDialog = reactive({
   ids: [] as number[],
   categoryId: 0,
 })
+const transferOwner = reactive({
+  visible: false,
+  running: false,
+  passwordLoading: false,
+  row: null as Row | null,
+  accountId: 0,
+  targetAccountId: null as number | null,
+  target: '',
+  password: '',
+})
 const channelInvite = reactive({
   visible: false,
   running: false,
@@ -548,6 +607,12 @@ const channelKick = reactive({
 
 const selectedIds = computed(() => selectedRows.value.map((x) => x.id))
 const selectionText = computed(() => selectionMode === 'select' ? '全选本页' : selectionMode === 'invert' ? '反选本页' : '清空选择')
+const transferExecutorLabel = computed(() => {
+  const id = transferOwner.row?.creatorAccountId
+  if (!id) return '请选择当前创建者账号'
+  const account = accounts.value.find((x) => x.id === id)
+  return account ? accountLabel(account) : transferOwner.row?.creatorDisplayPhone || `账号 ${id}`
+})
 
 async function loadMeta() {
   accounts.value = await panelApi.operationAccounts()
@@ -890,6 +955,86 @@ async function saveCategoryChange() {
   ElMessage.success('分类已更新')
   await loadMeta()
   await load()
+}
+
+async function openTransferOwner(row: Row) {
+  transferOwner.row = row
+  transferOwner.accountId = row.creatorAccountId || (filters.accountId > 0 ? filters.accountId : 0)
+  transferOwner.targetAccountId = null
+  transferOwner.target = ''
+  transferOwner.password = ''
+  transferOwner.visible = true
+  if (transferOwner.accountId > 0) {
+    await fillTransferPasswordFromStoredAccount(transferOwner.accountId)
+  }
+}
+
+async function fillTransferPasswordFromStoredAccount(accountId: number) {
+  if (accountId <= 0) return
+  transferOwner.passwordLoading = true
+  try {
+    const account = await panelApi.account(accountId)
+    transferOwner.password = account.twoFactorPassword || ''
+  } catch {
+    transferOwner.password = ''
+  } finally {
+    transferOwner.passwordLoading = false
+  }
+}
+
+async function onTransferExecutorChanged(value: number) {
+  transferOwner.accountId = value || 0
+  await fillTransferPasswordFromStoredAccount(transferOwner.accountId)
+}
+
+function onTransferTargetAccountChanged(value: number | null) {
+  transferOwner.targetAccountId = value || null
+  if (!transferOwner.targetAccountId) return
+
+  const account = accounts.value.find((x) => x.id === transferOwner.targetAccountId)
+  if (!account?.username) {
+    ElMessage.warning('该账号没有用户名，无法作为转让目标自动填写')
+    return
+  }
+
+  transferOwner.target = `@${account.username}`
+}
+
+async function submitTransferOwner() {
+  if (!transferOwner.row) return
+  if (transferOwner.accountId <= 0) {
+    ElMessage.warning('请选择当前创建者账号')
+    return
+  }
+  const target = transferOwner.target.trim()
+  if (!target) {
+    ElMessage.warning('请填写新所有者用户名')
+    return
+  }
+
+  await ElMessageBox.confirm(
+    `确定把${kindName.value}「${transferOwner.row.title}」转让给 ${target} 吗？成功后当前账号将不再是创建者。`,
+    '确认转让所有权',
+    { type: 'error', confirmButtonText: '确认转让', cancelButtonText: '取消' },
+  )
+
+  transferOwner.running = true
+  try {
+    const payload = {
+      target,
+      password: transferOwner.password,
+      accountId: transferOwner.accountId,
+      targetAccountId: transferOwner.targetAccountId,
+    }
+    const result = props.kind === 'channel'
+      ? await panelApi.transferChannelOwner(transferOwner.row.id, payload)
+      : await panelApi.transferGroupOwner(transferOwner.row.id, payload)
+    transferOwner.visible = false
+    ElMessage.success(result.message || '已转让所有权')
+    await load()
+  } finally {
+    transferOwner.running = false
+  }
 }
 
 async function leaveOne(row: Row) {

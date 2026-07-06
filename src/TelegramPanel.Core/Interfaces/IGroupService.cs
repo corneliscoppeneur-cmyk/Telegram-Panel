@@ -38,6 +38,11 @@ public interface IGroupService
     Task<bool> DisbandGroupAsync(int accountId, long groupId);
 
     /// <summary>
+    /// 转让群组所有权（需要当前创建者执行，并提供当前创建者的二级密码）。
+    /// </summary>
+    Task<bool> TransferOwnershipAsync(int accountId, long groupId, string targetUsername, string password);
+
+    /// <summary>
     /// 导出加入链接：公开群组返回 t.me 链接；否则导出邀请链接。
     /// </summary>
     Task<string> ExportJoinLinkAsync(int accountId, long groupId);

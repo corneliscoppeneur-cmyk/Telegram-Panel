@@ -529,8 +529,8 @@
             details += $"\n失败频道:\n{string.Join('\n', failureLines)}";
         else if (IsUserChatActiveTask(task.TaskType) && TryBuildUserChatActiveDetails(task, out var activeDetails))
             details += activeDetails;
-        else if (!IsBotAdminTask(task.TaskType) && !string.IsNullOrEmpty(task.Config))
-            details += $"\n配置信息:\n{task.Config}";
+        else if (!IsBotAdminTask(task.TaskType) && TryBuildReadableConfigDetails(task.TaskType, task.Config, out var configDetails))
+            details += $"\n配置摘要:\n{configDetails}";
 
         var html = System.Net.WebUtility.HtmlEncode(details)
             .Replace("\r\n", "\n", StringComparison.Ordinal)
@@ -563,6 +563,402 @@
 
         return StripRuntimeFields(text);
     }
+
+    private bool TryBuildReadableConfigDetails(string taskType, string? config, out string details)
+    {
+        details = string.Empty;
+        if (string.IsNullOrWhiteSpace(config))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(config);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                details = config.Trim();
+                return true;
+            }
+
+            var lines = taskType switch
+            {
+                BatchTaskTypes.ChannelGroupPrivateCreate => BuildPrivateCreateConfigLines(root),
+                BatchTaskTypes.ChannelGroupPublicize => BuildPublicizeConfigLines(root),
+                BatchTaskTypes.AccountAutoSync => BuildAccountSyncConfigLines(root),
+                _ when string.Equals((taskType ?? string.Empty).Trim(), "user_message_report", StringComparison.OrdinalIgnoreCase) => BuildMessageReportConfigLines(root),
+                _ => BuildGenericConfigLines(root)
+            };
+
+            details = string.Join('\n', lines);
+            return details.Length > 0;
+        }
+        catch
+        {
+            details = config.Trim();
+            return details.Length > 0;
+        }
+    }
+
+    private static List<string> BuildPrivateCreateConfigLines(JsonElement root)
+    {
+        var createType = GetJsonString(root, "create_type", ChannelGroupAutomationTaskObjectTypes.Channel);
+        return new List<string>
+        {
+            $"账号分类: {BuildSelectedCategorySummary(root)}",
+            $"创建对象: {GetObjectTypeName(createType)}",
+            $"{(createType == ChannelGroupAutomationTaskObjectTypes.Group ? "群组分类" : "频道分组")}: {GetChatGroupName(root, createType)}",
+            $"每账号累计创建上限: {GetJsonInt(root, "system_created_limit", 10)}",
+            $"本轮每账号创建数: {GetJsonInt(root, "per_account_batch_size", 1)}",
+            $"间隔: {FormatSecondsValue(GetJsonInt(root, "min_delay_seconds", 0))} ~ {FormatSecondsValue(GetJsonInt(root, "max_delay_seconds", 0))} 秒",
+            $"时间抖动: {GetJsonInt(root, "jitter_percent", 0)}%",
+            $"标题模板: {GetJsonString(root, "title_template", "-")}",
+            $"头像来源: {GetAvatarSourceName(root)}"
+        };
+    }
+
+    private static List<string> BuildPublicizeConfigLines(JsonElement root)
+    {
+        var targetType = GetJsonString(root, "target_type", ChannelGroupAutomationTaskObjectTypes.Channel);
+        return new List<string>
+        {
+            $"账号分类: {BuildSelectedCategorySummary(root)}",
+            $"处理对象: {GetObjectTypeName(targetType)}",
+            $"{(targetType == ChannelGroupAutomationTaskObjectTypes.Group ? "来源群组分类" : "来源频道分组")}: {GetChatGroupName(root, targetType)}",
+            $"{(targetType == ChannelGroupAutomationTaskObjectTypes.Group ? "公开后群组分类" : "公开后频道分组")}: {GetTargetChatGroupName(root, targetType)}",
+            $"私密创建满天数: {GetJsonInt(root, "min_system_created_days", 0)} 天",
+            $"每账号公开保有上限: {GetJsonInt(root, "max_public_count", 10)}",
+            $"本轮每账号处理数: {GetJsonInt(root, "per_account_batch_size", 1)}",
+            $"间隔: {FormatSecondsValue(GetJsonInt(root, "min_delay_seconds", 0))} ~ {FormatSecondsValue(GetJsonInt(root, "max_delay_seconds", 0))} 秒",
+            $"时间抖动: {GetJsonInt(root, "jitter_percent", 0)}%",
+            $"标题模板: {GetJsonString(root, "title_template", "-")}",
+            $"描述模板: {GetJsonString(root, "description_template", "-")}",
+            $"公开用户名模板: {GetJsonString(root, "username_template", "-")}",
+            $"头像来源: {GetAvatarSourceName(root)}"
+        };
+    }
+
+    private static List<string> BuildMessageReportConfigLines(JsonElement root)
+    {
+        return new List<string>
+        {
+            $"账号分类: {BuildSelectedCategorySummary(root)}",
+            $"举报目标数: {GetJsonArrayCount(root, "message_links")}",
+            $"间隔: {FormatDelaySeconds(GetJsonInt(root, "delay_min_ms", 0))} ~ {FormatDelaySeconds(GetJsonInt(root, "delay_max_ms", 0))} 秒",
+            $"最多举报: {FormatMaxReports(GetJsonInt(root, "max_reports", 0))}",
+            $"举报类型: {GetReportPresetName(GetJsonString(root, "report_preset", ""))}",
+            $"自定义关键词: {FormatStringArray(GetJsonStringArray(root, "option_keywords"))}",
+            $"举报文案: {GetJsonString(root, "comment", "-")}"
+        };
+    }
+
+    private static List<string> BuildAccountSyncConfigLines(JsonElement root)
+    {
+        var lines = new List<string>
+        {
+            $"触发方式: {GetSyncTriggerName(GetJsonString(root, "trigger", ""))}",
+            $"同步范围: {GetSyncScopeName(GetJsonString(root, "scope", ""))}"
+        };
+
+        var includes = GetJsonStringArray(root, "includes").Select(GetSyncFlagName).ToList();
+        if (includes.Count > 0)
+            lines.Add($"包含内容: {string.Join(", ", includes)}");
+
+        var excludes = GetJsonStringArray(root, "excludes").Select(GetSyncFlagName).ToList();
+        if (excludes.Count > 0)
+            lines.Add($"排除内容: {string.Join(", ", excludes)}");
+
+        if (root.TryGetProperty("progress", out var progress) && progress.ValueKind == JsonValueKind.Object)
+            lines.Add($"进度记录: 账号 {GetJsonInt(progress, "processedAccounts", 0)} / {GetJsonInt(progress, "totalAccounts", 0)}，失败 {GetJsonInt(progress, "failedAccounts", 0)}");
+
+        if (root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object)
+            lines.Add($"同步结果: 频道 {GetJsonInt(result, "totalChannelsSynced", 0)}，群组 {GetJsonInt(result, "totalGroupsSynced", 0)}");
+
+        var failureCount = GetJsonArrayCount(root, "failures");
+        if (failureCount > 0)
+            lines.Add($"失败记录: {failureCount} 条");
+
+        var error = GetJsonString(root, "error", "");
+        if (!string.IsNullOrWhiteSpace(error))
+            lines.Add($"错误: {error}");
+
+        return lines;
+    }
+
+    private static List<string> BuildGenericConfigLines(JsonElement root)
+    {
+        var lines = new List<string>();
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, "recent_failures", StringComparison.OrdinalIgnoreCase) || IsEmptyJsonValue(prop.Value))
+                continue;
+
+            lines.Add($"{GetConfigKeyName(prop.Name)}: {FormatJsonConfigValue(prop.Value)}");
+        }
+
+        return lines;
+    }
+
+    private static string GetJsonString(JsonElement root, string propertyName, string fallback = "-")
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return fallback;
+
+        var text = value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+        text = (text ?? string.Empty).Trim();
+        return text.Length == 0 ? fallback : text;
+    }
+
+    private static int GetJsonInt(JsonElement root, string propertyName, int fallback = 0)
+    {
+        if (!root.TryGetProperty(propertyName, out var value))
+            return fallback;
+
+        if (value.TryGetInt32(out var number))
+            return number;
+
+        return int.TryParse(value.ToString(), out number) ? number : fallback;
+    }
+
+    private static int GetJsonArrayCount(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.GetArrayLength()
+            : 0;
+
+    private static List<string> GetJsonStringArray(JsonElement root, string propertyName)
+    {
+        var values = new List<string>();
+        if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+            return values;
+
+        foreach (var item in array.EnumerateArray())
+        {
+            var value = FormatJsonConfigValue(item).Trim();
+            if (value.Length > 0 && value != "-")
+                values.Add(value);
+        }
+
+        return values;
+    }
+
+    private static bool IsEmptyJsonValue(JsonElement value) =>
+        value.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => true,
+            JsonValueKind.String => string.IsNullOrWhiteSpace(value.GetString()),
+            JsonValueKind.Array => value.GetArrayLength() == 0,
+            JsonValueKind.Object => !value.EnumerateObject().Any(),
+            _ => false
+        };
+
+    private static string FormatJsonConfigValue(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => "-",
+            JsonValueKind.String => string.IsNullOrWhiteSpace(value.GetString()) ? "-" : value.GetString()!.Trim(),
+            JsonValueKind.Number => value.ToString(),
+            JsonValueKind.True => "是",
+            JsonValueKind.False => "否",
+            JsonValueKind.Array => FormatJsonArrayValue(value),
+            JsonValueKind.Object => FormatJsonObjectValue(value),
+            _ => value.ToString()
+        };
+    }
+
+    private static string FormatJsonArrayValue(JsonElement value)
+    {
+        var items = value.EnumerateArray().ToList();
+        if (items.Count == 0)
+            return "-";
+
+        if (items.All(x => x.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+        {
+            var displayItems = items.Take(8).Select(FormatJsonConfigValue).ToList();
+            return items.Count > displayItems.Count
+                ? $"{string.Join(", ", displayItems)} 等 {items.Count} 项"
+                : string.Join(", ", displayItems);
+        }
+
+        return $"{items.Count} 项";
+    }
+
+    private static string FormatJsonObjectValue(JsonElement value)
+    {
+        var parts = value.EnumerateObject()
+            .Where(x => !IsEmptyJsonValue(x.Value))
+            .Take(8)
+            .Select(x => $"{GetConfigKeyName(x.Name)} {FormatJsonConfigValue(x.Value)}")
+            .ToList();
+
+        return parts.Count == 0 ? "-" : string.Join("，", parts);
+    }
+
+    private static string FormatStringArray(IReadOnlyCollection<string> values) =>
+        values.Count == 0 ? "-" : string.Join(", ", values);
+
+    private static string FormatSecondsValue(int seconds) =>
+        seconds <= 0 ? "0" : seconds.ToString("0.###");
+
+    private static string FormatMaxReports(int maxReports) =>
+        maxReports <= 0 ? "不设上限" : maxReports.ToString();
+
+    private static string GetObjectTypeName(string value) =>
+        value switch
+        {
+            ChannelGroupAutomationTaskObjectTypes.Group => "群组",
+            ChannelGroupAutomationTaskObjectTypes.Channel => "频道",
+            _ => string.IsNullOrWhiteSpace(value) ? "-" : value
+        };
+
+    private static string GetChatGroupName(JsonElement root, string objectType)
+    {
+        var isGroup = objectType == ChannelGroupAutomationTaskObjectTypes.Group;
+        var name = GetJsonString(root, isGroup ? "group_category_name" : "channel_group_name", "");
+        var id = GetJsonInt(root, isGroup ? "group_category_id" : "channel_group_id", 0);
+
+        if (!string.IsNullOrWhiteSpace(name) && id > 0)
+            return $"{name} (#{id})";
+        if (!string.IsNullOrWhiteSpace(name))
+            return name;
+        if (id > 0)
+            return $"#{id}";
+
+        return isGroup ? "未分类" : "未分组";
+    }
+
+    private static string GetTargetChatGroupName(JsonElement root, string objectType)
+    {
+        var isGroup = objectType == ChannelGroupAutomationTaskObjectTypes.Group;
+        var idKey = isGroup ? "target_group_category_id" : "target_channel_group_id";
+        if (!root.TryGetProperty(idKey, out var idElement) || idElement.ValueKind == JsonValueKind.Null)
+            return isGroup ? "保持原分类" : "保持原分组";
+
+        var name = GetJsonString(root, isGroup ? "target_group_category_name" : "target_channel_group_name", "");
+        var id = GetJsonInt(root, idKey, 0);
+        if (!string.IsNullOrWhiteSpace(name) && id > 0)
+            return $"{name} (#{id})";
+        if (!string.IsNullOrWhiteSpace(name))
+            return name;
+        if (id > 0)
+            return $"#{id}";
+
+        return isGroup ? "未分类" : "未分组";
+    }
+
+    private static string GetAvatarSourceName(JsonElement root)
+    {
+        var source = GetJsonString(root, "avatar_source", ChannelGroupAutomationAvatarSourceModes.None);
+        return source switch
+        {
+            ChannelGroupAutomationAvatarSourceModes.Fixed => $"固定上传{FormatOptionalSuffix(GetJsonString(root, "fixed_avatar_asset_path", ""))}",
+            ChannelGroupAutomationAvatarSourceModes.Dictionary => $"图片字典{FormatOptionalSuffix(GetJsonString(root, "avatar_dictionary_token", ""))}",
+            _ => "不设置"
+        };
+    }
+
+    private static string FormatOptionalSuffix(string value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : $"（{value}）";
+
+    private static string GetReportPresetName(string preset) =>
+        preset switch
+        {
+            "spam" => "垃圾 / 骚扰",
+            "violence" => "暴力 / 威胁",
+            "pornography" => "色情 / 淫秽",
+            "child_abuse" => "儿童虐待",
+            "copyright" => "版权侵权",
+            "illegal_drugs" => "违禁药物",
+            "personal_details" => "隐私 / 个人信息",
+            "other" => "其他",
+            "first_available" => "直接选第一个选项",
+            "custom" => "自定义关键词",
+            _ => string.IsNullOrWhiteSpace(preset) ? "-" : preset
+        };
+
+    private static string GetSyncTriggerName(string trigger) =>
+        trigger switch
+        {
+            "auto" => "自动",
+            "manual" => "手动",
+            _ => string.IsNullOrWhiteSpace(trigger) ? "-" : trigger
+        };
+
+    private static string GetSyncScopeName(string scope) =>
+        scope switch
+        {
+            "all_active_accounts" => "全部活跃账号",
+            _ => string.IsNullOrWhiteSpace(scope) ? "-" : scope
+        };
+
+    private static string GetSyncFlagName(string flag) =>
+        flag switch
+        {
+            "visible_channels_sync" => "同步可见频道",
+            "visible_groups_sync" => "同步可见群组",
+            "lightweight_telegram_status_refresh_on_sync_error" => "同步异常时轻量刷新账号状态",
+            "successful_sync_clears_transient_telegram_status" => "同步成功清除临时异常状态",
+            "deep_telegram_status_probe" => "深度探测 Telegram 状态",
+            "verification_code_collection" => "收集验证码",
+            _ => flag
+        };
+
+    private static string GetConfigKeyName(string key) =>
+        key switch
+        {
+            "category_id" => "账号分类ID",
+            "category_ids" => "账号分类ID",
+            "category_name" => "账号分类",
+            "category_names" => "账号分类",
+            "create_type" => "创建对象",
+            "target_type" => "处理对象",
+            "channel_group_id" => "频道分组ID",
+            "channel_group_name" => "频道分组",
+            "group_category_id" => "群组分类ID",
+            "group_category_name" => "群组分类",
+            "system_created_limit" => "每账号累计创建上限",
+            "per_account_batch_size" => "本轮每账号数量",
+            "min_delay_seconds" => "最小间隔秒数",
+            "max_delay_seconds" => "最大间隔秒数",
+            "delay_min_ms" => "最小间隔毫秒",
+            "delay_max_ms" => "最大间隔毫秒",
+            "jitter_percent" => "时间抖动",
+            "title_template" => "标题模板",
+            "description_template" => "描述模板",
+            "username_template" => "公开用户名模板",
+            "avatar_source" => "头像来源",
+            "fixed_avatar_asset_path" => "固定头像",
+            "avatar_dictionary_token" => "头像图片字典",
+            "image_dictionary_token" => "图片字典",
+            "asset_scope_id" => "资源作用域",
+            "targets" => "目标",
+            "dictionary" => "文字词典",
+            "account_mode" => "账号模式",
+            "target_mode" => "目标模式",
+            "message_mode" => "词典模式",
+            "max_messages" => "最多发送",
+            "enable_ai_verification" => "AI 验证",
+            "ai_model" => "AI 模型",
+            "verification_timeout_seconds" => "验证超时秒数",
+            "verification_timeout_as_failure" => "超时计失败",
+            "verification_match_mode" => "验证匹配方式",
+            "verification_keywords" => "验证关键词",
+            "verification_regexes" => "验证正则",
+            "verification_bot_usernames" => "验证机器人",
+            "message_links" => "举报目标",
+            "max_reports" => "最多举报",
+            "report_preset" => "举报类型",
+            "option_keywords" => "自定义关键词",
+            "comment" => "举报文案",
+            "trigger" => "触发方式",
+            "scope" => "同步范围",
+            "includes" => "包含内容",
+            "excludes" => "排除内容",
+            "progress" => "进度",
+            "result" => "结果",
+            "failures" => "失败记录",
+            "error" => "错误",
+            _ => key.Replace("_", " ", StringComparison.Ordinal)
+        };
 
     private static string StripRuntimeFields(string config)
     {
@@ -1049,8 +1445,8 @@
             details += $"上次运行: {TimeZone.Format(task.LastRunAtUtc.Value, "yyyy-MM-dd HH:mm")}\n";
         if (task.LastBatchTaskId.HasValue)
             details += $"最近批次任务: #{task.LastBatchTaskId.Value}\n";
-        if (!string.IsNullOrWhiteSpace(task.ConfigJson))
-            details += $"\n配置信息:\n{task.ConfigJson}";
+        if (TryBuildReadableConfigDetails(task.TaskType, task.ConfigJson, out var configDetails))
+            details += $"\n配置摘要:\n{configDetails}";
 
         var html = System.Net.WebUtility.HtmlEncode(details)
             .Replace("\r\n", "\n", StringComparison.Ordinal)

@@ -85,6 +85,8 @@ public sealed class ChannelGroupPublicizeTaskHandler : IModuleTaskHandler
                         channel.Title = title;
                         channel.About = about;
                         channel.Username = username;
+                        if (config.TargetChannelGroupId.HasValue)
+                            channel.GroupId = config.TargetChannelGroupId.Value > 0 ? config.TargetChannelGroupId.Value : null;
                         channel.SyncedAt = DateTime.UtcNow;
                         await channelManagement.UpdateChannelAsync(channel);
 
@@ -156,6 +158,8 @@ public sealed class ChannelGroupPublicizeTaskHandler : IModuleTaskHandler
                         group.Title = title;
                         group.About = about;
                         group.Username = username;
+                        if (config.TargetGroupCategoryId.HasValue)
+                            group.CategoryId = config.TargetGroupCategoryId.Value > 0 ? config.TargetGroupCategoryId.Value : null;
                         group.SyncedAt = DateTime.UtcNow;
                         await groupManagement.UpdateGroupAsync(group);
 

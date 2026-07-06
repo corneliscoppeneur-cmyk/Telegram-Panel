@@ -610,6 +610,43 @@ public class GroupService : IGroupService
         return true;
     }
 
+    public async Task<bool> TransferOwnershipAsync(int accountId, long groupId, string targetUsername, string password)
+    {
+        var client = await GetOrCreateConnectedClientAsync(accountId);
+        var dialogs = await ExecuteTelegramRequestAsync(
+            accountId,
+            "拉取频道/群组对话列表",
+            () => client.Messages_GetAllDialogs(),
+            CancellationToken.None,
+            resetClientOnTimeout: true);
+
+        var normalizedId = groupId > 0 ? groupId : Math.Abs(groupId);
+        var chat = dialogs.chats.Values.FirstOrDefault(x =>
+            x switch
+            {
+                Chat basicChat => basicChat.IsActive && basicChat.id == normalizedId,
+                Channel channel => channel.IsActive && !channel.IsChannel && channel.id == normalizedId,
+                _ => false
+            });
+
+        if (chat == null)
+            throw new InvalidOperationException($"群组 {groupId} not found");
+
+        var user = await ResolveTransferTargetUserAsync(client, targetUsername);
+        var srp = await BuildOwnershipTransferPasswordCheckAsync(client, password);
+
+        try
+        {
+            await client.Messages_EditChatCreator(chat.ToInputPeer(), user, srp);
+            _logger.LogInformation("Transferred group {GroupId} ownership to @{Username} by account {AccountId}", groupId, targetUsername.Trim().TrimStart('@'), accountId);
+            return true;
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateOwnershipTransferError(ex.Message), ex);
+        }
+    }
+
     public async Task<string> ExportJoinLinkAsync(int accountId, long groupId)
     {
         var client = await GetOrCreateConnectedClientAsync(accountId);
@@ -651,6 +688,70 @@ public class GroupService : IGroupService
         }
 
         throw new InvalidOperationException($"群组 {groupId} not found");
+    }
+
+    private static async Task<InputUser> ResolveTransferTargetUserAsync(Client client, string targetUsername)
+    {
+        var username = (targetUsername ?? string.Empty).Trim().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(username))
+            throw new ArgumentException("请填写新所有者用户名", nameof(targetUsername));
+        if (long.TryParse(username, out _))
+            throw new ArgumentException("转让所有权需要填写目标用户的 @username，不能只填数字用户 ID。", nameof(targetUsername));
+
+        try
+        {
+            var resolved = await client.Contacts_ResolveUsername(username);
+            var user = resolved.User;
+            if (user == null || user.access_hash == 0)
+                throw new InvalidOperationException("无法解析目标用户，请确认用户名正确，且执行账号能访问该用户。");
+
+            return new InputUser(user.id, user.access_hash);
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateOwnershipTransferError(ex.Message), ex);
+        }
+    }
+
+    private static async Task<InputCheckPasswordSRP> BuildOwnershipTransferPasswordCheckAsync(Client client, string password)
+    {
+        password = (password ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(password))
+            throw new ArgumentException("请输入当前创建者账号的二级密码", nameof(password));
+
+        var accountPassword = await client.Account_GetPassword();
+        if (accountPassword.current_algo == null)
+            throw new InvalidOperationException("当前创建者账号未开启二级密码，Telegram 不允许直接转让所有权。请先为该账号开启二级密码后再操作。");
+
+        try
+        {
+            return await WTelegram.Client.InputCheckPassword(accountPassword, password);
+        }
+        catch (RpcException ex)
+        {
+            throw new InvalidOperationException(TranslateOwnershipTransferError(ex.Message), ex);
+        }
+    }
+
+    private static string TranslateOwnershipTransferError(string? message)
+    {
+        var text = message ?? string.Empty;
+        if (text.Contains("PASSWORD_HASH_INVALID", StringComparison.OrdinalIgnoreCase))
+            return "二级密码错误，请确认填写的是当前创建者账号的二级密码。";
+        if (text.Contains("PASSWORD_MISSING", StringComparison.OrdinalIgnoreCase))
+            return "当前账号未开启二级密码，Telegram 要求开启二级密码后才能转让所有权。";
+        if (text.Contains("CHAT_ADMIN_REQUIRED", StringComparison.OrdinalIgnoreCase) || text.Contains("RIGHT_FORBIDDEN", StringComparison.OrdinalIgnoreCase))
+            return "执行账号不是创建者，或没有转让所有权权限。请使用当前群组创建者账号执行。";
+        if (text.Contains("USER_ID_INVALID", StringComparison.OrdinalIgnoreCase) || text.Contains("USERNAME_INVALID", StringComparison.OrdinalIgnoreCase) || text.Contains("USERNAME_NOT_OCCUPIED", StringComparison.OrdinalIgnoreCase))
+            return "目标用户无效，请确认用户名正确。";
+        if (text.Contains("USER_NOT_PARTICIPANT", StringComparison.OrdinalIgnoreCase))
+            return "目标用户不在该群组内，请先邀请目标用户并设为管理员后再转让。";
+        if (text.Contains("USER_NOT_MUTUAL_CONTACT", StringComparison.OrdinalIgnoreCase))
+            return "目标用户隐私限制导致无法转让，请先互加联系人或让目标用户加入群组。";
+        if (text.Contains("FLOOD_WAIT", StringComparison.OrdinalIgnoreCase))
+            return $"Telegram 风控限制：{text}";
+
+        return string.IsNullOrWhiteSpace(text) ? "所有权转让失败" : text;
     }
 
     public async Task<List<ChannelAdminInfo>> GetAdminsAsync(int accountId, long groupId)

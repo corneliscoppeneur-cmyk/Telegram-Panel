@@ -92,6 +92,18 @@ public sealed class ChannelGroupPublicizeTaskConfig
     [JsonPropertyName("group_category_name")]
     public string? GroupCategoryName { get; set; }
 
+    [JsonPropertyName("target_channel_group_id")]
+    public int? TargetChannelGroupId { get; set; }
+
+    [JsonPropertyName("target_channel_group_name")]
+    public string? TargetChannelGroupName { get; set; }
+
+    [JsonPropertyName("target_group_category_id")]
+    public int? TargetGroupCategoryId { get; set; }
+
+    [JsonPropertyName("target_group_category_name")]
+    public string? TargetGroupCategoryName { get; set; }
+
     [JsonPropertyName("min_system_created_days")]
     public int MinSystemCreatedDays { get; set; }
 

@@ -555,7 +555,7 @@ function isPersistentTask(task: BatchTask) {
 }
 
 function scheduledStatus(status: string) {
-  return status === 'paused' ? 'paused' : 'running'
+  return status === 'paused' ? 'paused' : 'enabled'
 }
 
 function isActiveStatus(status: string) {
@@ -998,7 +998,8 @@ function buildTaskExtraDetails(task: BatchTask) {
   }
 
   if (!isBotAdminTask(task.taskType)) {
-    lines.push('', '配置信息:', stripRuntimeFields(config))
+    const configDetails = buildReadableConfigDetails(task.taskType, config)
+    if (configDetails.length > 0) lines.push('', '配置摘要:', ...configDetails)
   }
 
   return lines
@@ -1026,6 +1027,279 @@ function stripRuntimeFields(config: string) {
   if (!obj) return config
   delete obj.recent_failures
   return JSON.stringify(obj, null, 2)
+}
+
+function buildReadableConfigDetails(taskType: string, config: string) {
+  const obj = parseJsonObject(config)
+  if (!obj) return config ? [`配置内容: ${config}`] : []
+
+  if (taskType === 'channel_group_private_create') return buildPrivateCreateDetails(obj)
+  if (taskType === 'channel_group_publicize') return buildPublicizeDetails(obj)
+  if (taskType === 'user_message_report') return buildMessageReportDetails(obj)
+  if (taskType === 'account_auto_sync') return buildAccountSyncDetails(obj)
+
+  return buildGenericConfigDetails(obj)
+}
+
+function buildPrivateCreateDetails(obj: Record<string, any>) {
+  const createType = String(obj.create_type || 'channel')
+  const lines = [
+    `账号分类: ${buildSelectedCategorySummary(obj)}`,
+    `创建对象: ${objectTypeName(createType)}`,
+    `${createType === 'group' ? '群组分类' : '频道分组'}: ${chatGroupName(obj, createType)}`,
+    `每账号累计创建上限: ${formatNumberValue(obj.system_created_limit, 10)}`,
+    `本轮每账号创建数: ${formatNumberValue(obj.per_account_batch_size, 1)}`,
+    `间隔: ${formatSecondsValue(obj.min_delay_seconds)} ~ ${formatSecondsValue(obj.max_delay_seconds)} 秒`,
+    `时间抖动: ${formatNumberValue(obj.jitter_percent, 0)}%`,
+    `标题模板: ${formatTextValue(obj.title_template)}`,
+    `头像来源: ${avatarSourceName(obj.avatar_source, obj)}`,
+  ]
+  return lines
+}
+
+function buildPublicizeDetails(obj: Record<string, any>) {
+  const targetType = String(obj.target_type || 'channel')
+  return [
+    `账号分类: ${buildSelectedCategorySummary(obj)}`,
+    `处理对象: ${objectTypeName(targetType)}`,
+    `${targetType === 'group' ? '来源群组分类' : '来源频道分组'}: ${chatGroupName(obj, targetType)}`,
+    `${targetType === 'group' ? '公开后群组分类' : '公开后频道分组'}: ${targetChatGroupName(obj, targetType)}`,
+    `私密创建满天数: ${formatNumberValue(obj.min_system_created_days, 0)} 天`,
+    `每账号公开保有上限: ${formatNumberValue(obj.max_public_count, 10)}`,
+    `本轮每账号处理数: ${formatNumberValue(obj.per_account_batch_size, 1)}`,
+    `间隔: ${formatSecondsValue(obj.min_delay_seconds)} ~ ${formatSecondsValue(obj.max_delay_seconds)} 秒`,
+    `时间抖动: ${formatNumberValue(obj.jitter_percent, 0)}%`,
+    `标题模板: ${formatTextValue(obj.title_template)}`,
+    `描述模板: ${formatTextValue(obj.description_template)}`,
+    `公开用户名模板: ${formatTextValue(obj.username_template)}`,
+    `头像来源: ${avatarSourceName(obj.avatar_source, obj)}`,
+  ]
+}
+
+function buildMessageReportDetails(obj: Record<string, any>) {
+  const messageLinks = Array.isArray(obj.message_links) ? obj.message_links : []
+  const optionKeywords = Array.isArray(obj.option_keywords) ? obj.option_keywords : []
+  return [
+    `账号分类: ${buildSelectedCategorySummary(obj)}`,
+    `举报目标数: ${messageLinks.length}`,
+    `间隔: ${formatDelaySeconds(Number(obj.delay_min_ms || 0))} ~ ${formatDelaySeconds(Number(obj.delay_max_ms || 0))} 秒`,
+    `最多举报: ${Number(obj.max_reports || 0) <= 0 ? '不设上限' : Number(obj.max_reports || 0)}`,
+    `举报类型: ${reportPresetName(obj.report_preset)}`,
+    `自定义关键词: ${optionKeywords.length > 0 ? optionKeywords.map((x) => String(x)).join(', ') : '-'}`,
+    `举报文案: ${formatTextValue(obj.comment)}`,
+  ]
+}
+
+function buildAccountSyncDetails(obj: Record<string, any>) {
+  const lines = [
+    `触发方式: ${syncTriggerName(obj.trigger)}`,
+    `同步范围: ${syncScopeName(obj.scope)}`,
+  ]
+  if (Array.isArray(obj.includes)) lines.push(`包含内容: ${obj.includes.map(syncFlagName).join(', ') || '-'}`)
+  if (Array.isArray(obj.excludes)) lines.push(`排除内容: ${obj.excludes.map(syncFlagName).join(', ') || '-'}`)
+  if (obj.progress && typeof obj.progress === 'object') {
+    const progress = obj.progress as Record<string, any>
+    lines.push(`进度记录: 账号 ${formatNumberValue(progress.processedAccounts, 0)} / ${formatNumberValue(progress.totalAccounts, 0)}，失败 ${formatNumberValue(progress.failedAccounts, 0)}`)
+  }
+  if (obj.result && typeof obj.result === 'object') {
+    const result = obj.result as Record<string, any>
+    lines.push(`同步结果: 频道 ${formatNumberValue(result.totalChannelsSynced, 0)}，群组 ${formatNumberValue(result.totalGroupsSynced, 0)}`)
+  }
+  if (Array.isArray(obj.failures) && obj.failures.length > 0) lines.push(`失败记录: ${obj.failures.length} 条`)
+  if (obj.error) lines.push(`错误: ${formatConfigValue(obj.error)}`)
+  return lines
+}
+
+function buildGenericConfigDetails(obj: Record<string, any>) {
+  const skipKeys = new Set(['recent_failures'])
+  return Object.entries(obj)
+    .filter(([key, value]) => !skipKeys.has(key) && !isEmptyConfigValue(value))
+    .map(([key, value]) => `${configKeyName(key)}: ${formatConfigValue(value)}`)
+}
+
+function isEmptyConfigValue(value: unknown) {
+  if (value == null || value === '') return true
+  if (Array.isArray(value)) return value.length === 0
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length === 0
+  return false
+}
+
+function formatConfigValue(value: unknown): string {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '-'
+  if (typeof value === 'string') return value.trim() || '-'
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '-'
+    const simpleItems = value.filter((item) => item == null || ['string', 'number', 'boolean'].includes(typeof item))
+    if (simpleItems.length === value.length) {
+      const values = simpleItems.slice(0, 8).map(formatConfigValue)
+      return value.length > values.length ? `${values.join(', ')} 等 ${value.length} 项` : values.join(', ')
+    }
+    return `${value.length} 项`
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => !isEmptyConfigValue(item))
+      .slice(0, 8)
+      .map(([key, item]) => `${configKeyName(key)} ${formatConfigValue(item)}`)
+    return entries.length > 0 ? entries.join('，') : '-'
+  }
+  return String(value)
+}
+
+function configKeyName(key: string) {
+  const labels: Record<string, string> = {
+    category_id: '账号分类ID',
+    category_ids: '账号分类ID',
+    category_name: '账号分类',
+    category_names: '账号分类',
+    create_type: '创建对象',
+    target_type: '处理对象',
+    channel_group_id: '频道分组ID',
+    channel_group_name: '频道分组',
+    group_category_id: '群组分类ID',
+    group_category_name: '群组分类',
+    system_created_limit: '每账号累计创建上限',
+    per_account_batch_size: '本轮每账号数量',
+    min_delay_seconds: '最小间隔秒数',
+    max_delay_seconds: '最大间隔秒数',
+    delay_min_ms: '最小间隔毫秒',
+    delay_max_ms: '最大间隔毫秒',
+    jitter_percent: '时间抖动',
+    title_template: '标题模板',
+    description_template: '描述模板',
+    username_template: '公开用户名模板',
+    avatar_source: '头像来源',
+    fixed_avatar_asset_path: '固定头像',
+    avatar_dictionary_token: '头像图片字典',
+    image_dictionary_token: '图片字典',
+    asset_scope_id: '资源作用域',
+    targets: '目标',
+    dictionary: '文字词典',
+    account_mode: '账号模式',
+    target_mode: '目标模式',
+    message_mode: '词典模式',
+    max_messages: '最多发送',
+    enable_ai_verification: 'AI 验证',
+    ai_model: 'AI 模型',
+    verification_timeout_seconds: '验证超时秒数',
+    verification_timeout_as_failure: '超时计失败',
+    verification_match_mode: '验证匹配方式',
+    verification_keywords: '验证关键词',
+    verification_regexes: '验证正则',
+    verification_bot_usernames: '验证机器人',
+    message_links: '举报目标',
+    max_reports: '最多举报',
+    report_preset: '举报类型',
+    option_keywords: '自定义关键词',
+    comment: '举报文案',
+    trigger: '触发方式',
+    scope: '同步范围',
+    includes: '包含内容',
+    excludes: '排除内容',
+    progress: '进度',
+    result: '结果',
+    failures: '失败记录',
+    error: '错误',
+  }
+  return labels[key] || key.replace(/_/g, ' ')
+}
+
+function objectTypeName(value: unknown) {
+  const text = String(value || '').trim()
+  if (text === 'group') return '群组'
+  if (text === 'channel') return '频道'
+  return text || '-'
+}
+
+function chatGroupName(obj: Record<string, any>, type: string) {
+  const nameKey = type === 'group' ? 'group_category_name' : 'channel_group_name'
+  const idKey = type === 'group' ? 'group_category_id' : 'channel_group_id'
+  const name = String(obj[nameKey] || '').trim()
+  const id = Number(obj[idKey] || 0)
+  if (name && id > 0) return `${name} (#${id})`
+  if (name) return name
+  if (id > 0) return `#${id}`
+  return type === 'group' ? '未分类' : '未分组'
+}
+
+function targetChatGroupName(obj: Record<string, any>, type: string) {
+  const isGroup = type === 'group'
+  const idKey = isGroup ? 'target_group_category_id' : 'target_channel_group_id'
+  if (obj[idKey] === null || obj[idKey] === undefined) return isGroup ? '保持原分类' : '保持原分组'
+  const nameKey = isGroup ? 'target_group_category_name' : 'target_channel_group_name'
+  const name = String(obj[nameKey] || '').trim()
+  const id = Number(obj[idKey] || 0)
+  if (name && id > 0) return `${name} (#${id})`
+  if (name) return name
+  if (id > 0) return `#${id}`
+  return isGroup ? '未分类' : '未分组'
+}
+
+function avatarSourceName(value: unknown, obj: Record<string, any>) {
+  const source = String(value || 'none').trim()
+  if (source === 'fixed') return `固定上传${obj.fixed_avatar_asset_path ? `（${obj.fixed_avatar_asset_path}）` : ''}`
+  if (source === 'dictionary') return `图片字典${obj.avatar_dictionary_token ? `（${obj.avatar_dictionary_token}）` : ''}`
+  return '不设置'
+}
+
+function formatNumberValue(value: unknown, fallback: number) {
+  const number = Number(value)
+  return Number.isFinite(number) ? String(number) : String(fallback)
+}
+
+function formatTextValue(value: unknown) {
+  return String(value || '').trim() || '-'
+}
+
+function formatSecondsValue(value: unknown) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return '0'
+  return number.toLocaleString('zh-CN', { maximumFractionDigits: 3 })
+}
+
+function reportPresetName(value: unknown) {
+  const preset = String(value || '').trim()
+  const labels: Record<string, string> = {
+    spam: '垃圾 / 骚扰',
+    violence: '暴力 / 威胁',
+    pornography: '色情 / 淫秽',
+    child_abuse: '儿童虐待',
+    copyright: '版权侵权',
+    illegal_drugs: '违禁药物',
+    personal_details: '隐私 / 个人信息',
+    other: '其他',
+    first_available: '直接选第一个选项',
+    custom: '自定义关键词',
+  }
+  return labels[preset] || preset || '-'
+}
+
+function syncTriggerName(value: unknown) {
+  const trigger = String(value || '').trim()
+  if (trigger === 'auto') return '自动'
+  if (trigger === 'manual') return '手动'
+  return trigger || '-'
+}
+
+function syncScopeName(value: unknown) {
+  const scope = String(value || '').trim()
+  if (scope === 'all_active_accounts') return '全部活跃账号'
+  return scope || '-'
+}
+
+function syncFlagName(value: unknown) {
+  const flag = String(value || '').trim()
+  const labels: Record<string, string> = {
+    visible_channels_sync: '同步可见频道',
+    visible_groups_sync: '同步可见群组',
+    lightweight_telegram_status_refresh_on_sync_error: '同步异常时轻量刷新账号状态',
+    successful_sync_clears_transient_telegram_status: '同步成功清除临时异常状态',
+    deep_telegram_status_probe: '深度探测 Telegram 状态',
+    verification_code_collection: '收集验证码',
+  }
+  return labels[flag] || flag
 }
 
 function extractBotAdminFailureLines(task: BatchTask) {
@@ -1143,7 +1417,10 @@ async function showScheduledDetails(task: ScheduledTask) {
   if (task.nextRunAtUtc) lines.push(`下次运行: ${formatTime(task.nextRunAtUtc)}`)
   if (task.lastRunAtUtc) lines.push(`上次运行: ${formatTime(task.lastRunAtUtc)}`)
   if (task.lastBatchTaskId) lines.push(`最近批次任务: #${task.lastBatchTaskId}`)
-  if (task.configJson) lines.push('', '配置信息:', task.configJson)
+  if (task.configJson) {
+    const configDetails = buildReadableConfigDetails(task.taskType, task.configJson)
+    if (configDetails.length > 0) lines.push('', '配置摘要:', ...configDetails)
+  }
   detailDialog.value = {
     visible: true,
     title: `计划任务详情 #${task.id}`,

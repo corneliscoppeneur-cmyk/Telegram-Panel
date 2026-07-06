@@ -59,12 +59,17 @@
 
         <MudGrid>
             <MudItem xs="12" md="6">
-                <MudNumericField T="int" @bind-Value="systemCreatedLimit" @bind-Value:after="OnInputsChanged" Label="系统创建数量上限" Variant="Variant.Outlined" Min="1" Max="100000" />
+                <MudNumericField T="int" @bind-Value="systemCreatedLimit" @bind-Value:after="OnInputsChanged" Label="每账号累计创建上限" Variant="Variant.Outlined" Min="1" Max="100000" />
             </MudItem>
             <MudItem xs="12" md="6">
-                <MudNumericField T="int" @bind-Value="perAccountBatchSize" @bind-Value:after="OnInputsChanged" Label="每账号本轮处理数量" Variant="Variant.Outlined" Min="1" Max="1000" />
+                <MudNumericField T="int" @bind-Value="perAccountBatchSize" @bind-Value:after="OnInputsChanged" Label="本轮每账号创建数" Variant="Variant.Outlined" Min="1" Max="1000" />
             </MudItem>
         </MudGrid>
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+            每账号累计创建上限：统计该账号已由系统任务创建并记录的频道/群组数量，达到上限后本轮不会继续创建。
+            本轮每账号创建数：本次任务里每个账号最多创建几个。比如上限 10、某账号已有 9 个、本轮每账号创建数填 5，
+            该账号本轮最多也只会再创建 1 个。
+        </MudAlert>
 
         <MudTextField @bind-Value="titleTemplate" @bind-Value:after="OnInputsChanged"
                       Label="标题模板" Variant="Variant.Outlined"
@@ -268,13 +273,13 @@
 
         if (systemCreatedLimit < 1)
         {
-            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "系统创建数量上限必须大于 0"));
+            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "每账号累计创建上限必须大于 0"));
             return;
         }
 
         if (perAccountBatchSize < 1)
         {
-            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "每账号本轮处理数量必须大于 0"));
+            await DraftChanged.InvokeAsync(new ModuleTaskDraft(0, null, false, "本轮每账号创建数必须大于 0"));
             return;
         }
 

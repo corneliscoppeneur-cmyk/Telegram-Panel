@@ -152,6 +152,7 @@ public static class PanelAdminApiEndpoints
         secured.MapPost("/channels/{id:int}/export-link", ExportChannelLinkAsync);
         secured.MapPost("/channels/{id:int}/leave", LeaveChannelAsync);
         secured.MapPost("/channels/{id:int}/disband", DisbandChannelAsync);
+        secured.MapPost("/channels/{id:int}/transfer-owner", TransferChannelOwnerAsync);
 
         secured.MapGet("/channel-groups", GetChannelGroupsAsync);
         secured.MapPost("/channel-groups", CreateChannelGroupAsync);
@@ -172,6 +173,7 @@ public static class PanelAdminApiEndpoints
         secured.MapPost("/groups/{id:int}/export-link", ExportGroupLinkAsync);
         secured.MapPost("/groups/{id:int}/leave", LeaveGroupAsync);
         secured.MapPost("/groups/{id:int}/disband", DisbandGroupAsync);
+        secured.MapPost("/groups/{id:int}/transfer-owner", TransferGroupOwnerAsync);
 
         secured.MapGet("/group-categories", GetGroupCategoriesAsync);
         secured.MapPost("/group-categories", CreateGroupCategoryAsync);
@@ -1728,7 +1730,8 @@ public static class PanelAdminApiEndpoints
             return Results.Ok(new AccountQrLoginResponseDto(false, request.LoginId, "password", "请输入两步验证密码", null, null, null));
 
         var result = await accountService.SubmitQrPasswordAsync(request.LoginId, password);
-        return await BuildQrLoginResponseAsync(result, accountService, accountManagement, configuration);
+        var passwordToSave = request.SaveTwoFactorPassword == true ? password : null;
+        return await BuildQrLoginResponseAsync(result, accountService, accountManagement, configuration, passwordToSave);
     }
 
     private static async Task<IResult> CancelAccountQrLoginAsync(
@@ -1785,7 +1788,8 @@ public static class PanelAdminApiEndpoints
             return Results.BadRequest(new OperationResultDto(false, "请输入两步验证密码"));
 
         var result = await accountService.SubmitPasswordAsync(request.LoginId, password);
-        return await BuildLoginResponseAsync(request.LoginId, result, accountService, accountManagement, configuration);
+        var passwordToSave = request.SaveTwoFactorPassword == true ? password : null;
+        return await BuildLoginResponseAsync(request.LoginId, result, accountService, accountManagement, configuration, passwordToSave);
     }
 
     private static async Task<IResult> ResetAccountLoginAsync(
@@ -2695,6 +2699,110 @@ public static class PanelAdminApiEndpoints
         await groupService.DisbandGroupAsync(accountId.Value, group.TelegramId);
         await groupManagement.DeleteGroupAsync(group.Id);
         return Results.Ok(new OperationResultDto(true, "已解散群组"));
+    }
+
+    private static async Task<IResult> TransferChannelOwnerAsync(
+        int id,
+        TransferOwnerRequestDto request,
+        ChannelManagementService channelManagement,
+        AccountManagementService accountManagement,
+        IChannelService channelService)
+    {
+        var channel = await channelManagement.GetChannelAsync(id);
+        if (channel == null)
+            return Results.NotFound(new OperationResultDto(false, "频道不存在"));
+
+        var target = NormalizeUsername(request.Target);
+        if (string.IsNullOrWhiteSpace(target))
+            return Results.BadRequest(new OperationResultDto(false, "请填写新所有者用户名"));
+
+        var executorAccountId = channel.CreatorAccountId ?? (request.AccountId is > 0 ? request.AccountId : null);
+        if (executorAccountId is not > 0)
+            return Results.BadRequest(new OperationResultDto(false, "该频道没有本地创建者记录，请先选择当前创建者账号执行"));
+
+        var executor = await accountManagement.GetAccountAsync(executorAccountId.Value);
+        if (executor == null)
+            return Results.NotFound(new OperationResultDto(false, "执行账号不存在"));
+
+        var password = ResolveTransferPassword(request.Password, executor);
+        if (string.IsNullOrWhiteSpace(password))
+            return Results.BadRequest(new OperationResultDto(false, "请输入当前创建者账号的二级密码"));
+
+        var (targetAccount, targetAccountError) = await ResolveTargetAccountAsync(request.TargetAccountId, target, accountManagement);
+        if (!string.IsNullOrWhiteSpace(targetAccountError))
+            return Results.BadRequest(new OperationResultDto(false, targetAccountError));
+        try
+        {
+            await channelService.TransferOwnershipAsync(executorAccountId.Value, channel.TelegramId, target, password);
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+
+        var now = DateTime.UtcNow;
+        channel.CreatorAccountId = targetAccount?.Id;
+        await channelManagement.UpdateChannelAsync(channel);
+        await channelManagement.UpsertAccountChannelAsync(executorAccountId.Value, channel.Id, isCreator: false, isAdmin: true, syncedAtUtc: now);
+        if (targetAccount != null)
+            await channelManagement.UpsertAccountChannelAsync(targetAccount.Id, channel.Id, isCreator: true, isAdmin: true, syncedAtUtc: now);
+
+        var message = targetAccount == null
+            ? "已提交所有权转让。目标不是本系统账号或未匹配到账号，请同步频道后刷新创建者。"
+            : $"已转让给 {targetAccount.DisplayPhone}";
+        return Results.Ok(new OperationResultDto(true, message));
+    }
+
+    private static async Task<IResult> TransferGroupOwnerAsync(
+        int id,
+        TransferOwnerRequestDto request,
+        GroupManagementService groupManagement,
+        AccountManagementService accountManagement,
+        IGroupService groupService)
+    {
+        var group = await groupManagement.GetGroupAsync(id);
+        if (group == null)
+            return Results.NotFound(new OperationResultDto(false, "群组不存在"));
+
+        var target = NormalizeUsername(request.Target);
+        if (string.IsNullOrWhiteSpace(target))
+            return Results.BadRequest(new OperationResultDto(false, "请填写新所有者用户名"));
+
+        var executorAccountId = group.CreatorAccountId ?? (request.AccountId is > 0 ? request.AccountId : null);
+        if (executorAccountId is not > 0)
+            return Results.BadRequest(new OperationResultDto(false, "该群组没有本地创建者记录，请先选择当前创建者账号执行"));
+
+        var executor = await accountManagement.GetAccountAsync(executorAccountId.Value);
+        if (executor == null)
+            return Results.NotFound(new OperationResultDto(false, "执行账号不存在"));
+
+        var password = ResolveTransferPassword(request.Password, executor);
+        if (string.IsNullOrWhiteSpace(password))
+            return Results.BadRequest(new OperationResultDto(false, "请输入当前创建者账号的二级密码"));
+
+        var (targetAccount, targetAccountError) = await ResolveTargetAccountAsync(request.TargetAccountId, target, accountManagement);
+        if (!string.IsNullOrWhiteSpace(targetAccountError))
+            return Results.BadRequest(new OperationResultDto(false, targetAccountError));
+        try
+        {
+            await groupService.TransferOwnershipAsync(executorAccountId.Value, group.TelegramId, target, password);
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest(new OperationResultDto(false, ex.Message));
+        }
+
+        var now = DateTime.UtcNow;
+        group.CreatorAccountId = targetAccount?.Id;
+        await groupManagement.UpdateGroupAsync(group);
+        await groupManagement.UpsertAccountGroupAsync(executorAccountId.Value, group.Id, isCreator: false, isAdmin: true, syncedAtUtc: now);
+        if (targetAccount != null)
+            await groupManagement.UpsertAccountGroupAsync(targetAccount.Id, group.Id, isCreator: true, isAdmin: true, syncedAtUtc: now);
+
+        var message = targetAccount == null
+            ? "已提交所有权转让。目标不是本系统账号或未匹配到账号，请同步群组后刷新创建者。"
+            : $"已转让给 {targetAccount.DisplayPhone}";
+        return Results.Ok(new OperationResultDto(true, message));
     }
 
     private static async Task<IResult> GetChannelGroupsAsync(ChannelGroupManagementService groupManagement)
@@ -4799,6 +4907,41 @@ public static class PanelAdminApiEndpoints
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
+    private static string? ResolveTransferPassword(string? requestPassword, Account executorAccount)
+    {
+        return NormalizeNullable(requestPassword) ?? NormalizeNullable(executorAccount.TwoFactorPassword);
+    }
+
+    private static async Task<(Account? Account, string? Error)> ResolveTargetAccountAsync(int? targetAccountId, string targetUsername, AccountManagementService accountManagement)
+    {
+        var normalizedTarget = NormalizeUsername(targetUsername);
+        if (string.IsNullOrWhiteSpace(normalizedTarget))
+            return (null, null);
+
+        if (targetAccountId is > 0)
+        {
+            var selected = await accountManagement.GetAccountAsync(targetAccountId.Value);
+            if (selected == null)
+                return (null, "选择的新所有者账号不存在");
+            if (string.IsNullOrWhiteSpace(NormalizeUsername(selected.Username)))
+                return (null, "选择的新所有者账号没有用户名，请先为该账号设置 Telegram 用户名");
+            if (!UsernameEquals(selected.Username, normalizedTarget))
+                return (null, "选择的新所有者账号与填写的用户名不一致，请重新选择或清空系统账号选择");
+
+            return (selected, null);
+        }
+
+        var accounts = await accountManagement.GetAllAccountsAsync();
+        return (accounts.FirstOrDefault(x => UsernameEquals(x.Username, normalizedTarget)), null);
+    }
+
+    private static bool UsernameEquals(string? accountUsername, string targetUsername)
+    {
+        var normalized = NormalizeUsername(accountUsername);
+        return !string.IsNullOrWhiteSpace(normalized)
+            && string.Equals(normalized, targetUsername, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task TryRegisterWebhookForBotAsync(
         string? token,
         TelegramBotApiClient botApi,
@@ -4881,11 +5024,12 @@ public static class PanelAdminApiEndpoints
         LoginResult result,
         IAccountService accountService,
         AccountManagementService accountManagement,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        string? twoFactorPasswordToSave = null)
     {
         if (result.Success && result.Account != null)
         {
-            var account = await SaveLoggedInAccountAsync(result.Account, accountManagement, configuration);
+            var account = await SaveLoggedInAccountAsync(result.Account, accountManagement, configuration, twoFactorPasswordToSave);
             try
             {
                 await accountService.ReleaseClientAsync(loginId);
@@ -4934,11 +5078,12 @@ public static class PanelAdminApiEndpoints
         QrLoginResult result,
         IAccountService accountService,
         AccountManagementService accountManagement,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        string? twoFactorPasswordToSave = null)
     {
         if (result.Success && result.Account != null)
         {
-            var account = await SaveLoggedInAccountAsync(result.Account, accountManagement, configuration);
+            var account = await SaveLoggedInAccountAsync(result.Account, accountManagement, configuration, twoFactorPasswordToSave);
             try
             {
                 await accountService.ReleaseCompletedQrLoginAsync(result.LoginId);
@@ -4973,7 +5118,8 @@ public static class PanelAdminApiEndpoints
     private static async Task<Account> SaveLoggedInAccountAsync(
         AccountInfo accountInfo,
         AccountManagementService accountManagement,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        string? twoFactorPasswordToSave = null)
     {
         if (!TryGetTelegramApi(configuration, out var apiId, out var apiHash, out var apiError))
             throw new InvalidOperationException(apiError);
@@ -4983,6 +5129,7 @@ public static class PanelAdminApiEndpoints
         if (string.IsNullOrWhiteSpace(phoneDigits))
             throw new InvalidOperationException("手机号无效，无法保存账号");
 
+        var normalizedTwoFactorPassword = NormalizeNullable(twoFactorPasswordToSave);
         var existing = await accountManagement.GetAccountByPhoneAsync(phoneDigits);
         if (existing != null)
         {
@@ -4999,6 +5146,8 @@ public static class PanelAdminApiEndpoints
             existing.TelegramStatusCheckedAtUtc = DateTime.UtcNow;
             existing.LastSyncAt = DateTime.UtcNow;
             existing.LastLoginAt = DateTime.UtcNow;
+            if (normalizedTwoFactorPassword != null)
+                existing.TwoFactorPassword = normalizedTwoFactorPassword;
             await accountManagement.UpdateAccountAsync(existing);
             return existing;
         }
@@ -5013,6 +5162,7 @@ public static class PanelAdminApiEndpoints
             ApiId = apiId,
             ApiHash = apiHash,
             IsActive = true,
+            TwoFactorPassword = normalizedTwoFactorPassword,
             CreatedAt = DateTime.UtcNow,
             LastSyncAt = DateTime.UtcNow,
             LastLoginAt = DateTime.UtcNow
@@ -5913,7 +6063,7 @@ public sealed record StartAccountLoginRequestDto(string? Phone, int LoginId = 0)
 public sealed record StartAccountQrLoginRequestDto(int LoginId = 0);
 public sealed record AccountLoginSessionRequestDto(int LoginId);
 public sealed record AccountLoginCodeRequestDto(int LoginId, string? Code);
-public sealed record AccountLoginPasswordRequestDto(int LoginId, string? Password);
+public sealed record AccountLoginPasswordRequestDto(int LoginId, string? Password, bool? SaveTwoFactorPassword = null);
 public sealed record CreateTaskRequestDto(string TaskType, int Total, string? Config);
 public sealed record UpdateTaskRequestDto(string TaskType, int Total, string? Config);
 public sealed record CreateScheduledTaskRequestDto(string TaskType, int Total, string? ConfigJson, string CronExpression, string? Status);
@@ -6267,6 +6417,7 @@ public sealed record ChannelKickBatchRequestDto(
     string? Target,
     int? AccountId,
     bool PermanentBan);
+public sealed record TransferOwnerRequestDto(string? Target, string? Password, int? AccountId, int? TargetAccountId);
 public sealed record SaveSimpleCategoryRequestDto(string? Name, string? Description);
 public sealed record SaveResourceAssignmentsRequestDto(IReadOnlyList<int> ScopeIds, IReadOnlyList<int> SelectedIds);
 public sealed record SyncChatsRequestDto(int? AccountId);

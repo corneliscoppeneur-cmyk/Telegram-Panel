@@ -209,16 +209,16 @@ export const panelApi = {
     api.post<AccountQrLoginResponse>('/accounts/login/qr/start', { loginId: loginId || 0 }, { timeout: 120_000 }).then((r) => r.data),
   pollAccountQrLogin: (loginId: number) =>
     api.post<AccountQrLoginResponse>('/accounts/login/qr/poll', { loginId }, { timeout: 120_000 }).then((r) => r.data),
-  submitAccountQrLoginPassword: (loginId: number, password: string) =>
-    api.post<AccountQrLoginResponse>('/accounts/login/qr/password', { loginId, password }, { timeout: 120_000 }).then((r) => r.data),
+  submitAccountQrLoginPassword: (loginId: number, password: string, saveTwoFactorPassword = false) =>
+    api.post<AccountQrLoginResponse>('/accounts/login/qr/password', { loginId, password, saveTwoFactorPassword }, { timeout: 120_000 }).then((r) => r.data),
   cancelAccountQrLogin: (loginId: number) =>
     api.post<OperationResult>('/accounts/login/qr/cancel', { loginId }).then((r) => r.data),
   submitAccountLoginCode: (loginId: number, code: string) =>
     api.post<AccountLoginResponse>('/accounts/login/code', { loginId, code }, { timeout: 120_000 }).then((r) => r.data),
   resendAccountLoginCode: (loginId: number) =>
     api.post<AccountLoginResponse>('/accounts/login/resend', { loginId }, { timeout: 120_000 }).then((r) => r.data),
-  submitAccountLoginPassword: (loginId: number, password: string) =>
-    api.post<AccountLoginResponse>('/accounts/login/password', { loginId, password }, { timeout: 120_000 }).then((r) => r.data),
+  submitAccountLoginPassword: (loginId: number, password: string, saveTwoFactorPassword = false) =>
+    api.post<AccountLoginResponse>('/accounts/login/password', { loginId, password, saveTwoFactorPassword }, { timeout: 120_000 }).then((r) => r.data),
   resetAccountLogin: (loginId: number) =>
     api.post<OperationResult>('/accounts/login/reset', { loginId }).then((r) => r.data),
 
@@ -371,6 +371,8 @@ export const panelApi = {
     api.post<OperationResult>(`/channels/${id}/leave`, {}, { timeout: 120_000 }).then((r) => r.data),
   disbandChannel: (id: number) =>
     api.post<OperationResult>(`/channels/${id}/disband`, {}, { timeout: 120_000 }).then((r) => r.data),
+  transferChannelOwner: (id: number, payload: { target: string; password?: string | null; accountId?: number | null; targetAccountId?: number | null }) =>
+    api.post<OperationResult>(`/channels/${id}/transfer-owner`, payload, { timeout: 120_000 }).then((r) => r.data),
 
   channelGroups: () => api.get<SimpleCategory[]>('/channel-groups').then((r) => r.data),
   createChannelGroup: (payload: { name: string; description?: string | null }) =>
@@ -419,6 +421,8 @@ export const panelApi = {
     api.post<OperationResult>(`/groups/${id}/leave`, {}, { timeout: 120_000 }).then((r) => r.data),
   disbandGroup: (id: number) =>
     api.post<OperationResult>(`/groups/${id}/disband`, {}, { timeout: 120_000 }).then((r) => r.data),
+  transferGroupOwner: (id: number, payload: { target: string; password?: string | null; accountId?: number | null; targetAccountId?: number | null }) =>
+    api.post<OperationResult>(`/groups/${id}/transfer-owner`, payload, { timeout: 120_000 }).then((r) => r.data),
 
   groupCategories: () => api.get<SimpleCategory[]>('/group-categories').then((r) => r.data),
   createGroupCategory: (payload: { name: string; description?: string | null }) =>

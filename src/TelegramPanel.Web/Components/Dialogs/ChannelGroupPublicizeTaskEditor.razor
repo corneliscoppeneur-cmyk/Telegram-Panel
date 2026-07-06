@@ -57,17 +57,44 @@
             </MudSelect>
         }
 
+        @if (IsChannel)
+        {
+            <MudSelect T="int" @bind-Value="targetChannelGroupId" @bind-Value:after="OnInputsChanged" Label="公开后频道分组" Variant="Variant.Outlined">
+                <MudSelectItem Value="-1">保持原分组</MudSelectItem>
+                <MudSelectItem Value="0">移动到未分组</MudSelectItem>
+                @foreach (var item in channelGroups)
+                {
+                    <MudSelectItem Value="@item.Id">@item.Name</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        else
+        {
+            <MudSelect T="int" @bind-Value="targetGroupCategoryId" @bind-Value:after="OnInputsChanged" Label="公开后群组分类" Variant="Variant.Outlined">
+                <MudSelectItem Value="-1">保持原分类</MudSelectItem>
+                <MudSelectItem Value="0">移动到未分类</MudSelectItem>
+                @foreach (var item in groupCategories)
+                {
+                    <MudSelectItem Value="@item.Id">@item.Name</MudSelectItem>
+                }
+            </MudSelect>
+        }
+
         <MudGrid>
             <MudItem xs="12" md="4">
-                <MudNumericField T="int" @bind-Value="minSystemCreatedDays" @bind-Value:after="OnInputsChanged" Label="最小系统创建天数" Variant="Variant.Outlined" Min="0" Max="3650" />
+                <MudNumericField T="int" @bind-Value="minSystemCreatedDays" @bind-Value:after="OnInputsChanged" Label="私密创建满天数" Variant="Variant.Outlined" Min="0" Max="3650" />
             </MudItem>
             <MudItem xs="12" md="4">
-                <MudNumericField T="int" @bind-Value="maxPublicCount" @bind-Value:after="OnInputsChanged" Label="保持公开最大数量" Variant="Variant.Outlined" Min="1" Max="1000" />
+                <MudNumericField T="int" @bind-Value="maxPublicCount" @bind-Value:after="OnInputsChanged" Label="每账号公开保有上限" Variant="Variant.Outlined" Min="1" Max="1000" />
             </MudItem>
             <MudItem xs="12" md="4">
                 <MudNumericField T="int" @bind-Value="perAccountBatchSize" @bind-Value:after="OnInputsChanged" Label="每账号本轮处理数量" Variant="Variant.Outlined" Min="1" Max="1000" />
             </MudItem>
         </MudGrid>
+        <MudText Typo="Typo.caption">
+            私密创建满天数表示只公开系统记录为私密创建、且已创建达到该天数以上的频道/群组；
+            用于避免刚创建的私密资源太快公开，降低风控和封禁风险。公开后分组/分类默认保持原值。
+        </MudText>
 
         <MudTextField @bind-Value="titleTemplate" @bind-Value:after="OnInputsChanged"
                       Label="标题模板" Variant="Variant.Outlined"
@@ -146,6 +173,8 @@
     private string targetType = ChannelGroupAutomationTaskObjectTypes.Channel;
     private int selectedChannelGroupId;
     private int selectedGroupCategoryId;
+    private int targetChannelGroupId = -1;
+    private int targetGroupCategoryId = -1;
     private int minSystemCreatedDays;
     private int maxPublicCount = 10;
     private int perAccountBatchSize = 1;
@@ -204,6 +233,8 @@
                 : ChannelGroupAutomationTaskObjectTypes.Channel;
             selectedChannelGroupId = config.ChannelGroupId ?? 0;
             selectedGroupCategoryId = config.GroupCategoryId ?? 0;
+            targetChannelGroupId = NormalizeOptionalCategoryId(config.TargetChannelGroupId);
+            targetGroupCategoryId = NormalizeOptionalCategoryId(config.TargetGroupCategoryId);
             minSystemCreatedDays = Math.Max(0, config.MinSystemCreatedDays);
             maxPublicCount = Math.Max(1, config.MaxPublicCount);
             perAccountBatchSize = Math.Max(1, config.PerAccountBatchSize);
@@ -333,6 +364,10 @@
             ChannelGroupName = IsChannel && selectedChannelGroupId > 0 ? channelGroups.FirstOrDefault(x => x.Id == selectedChannelGroupId)?.Name : null,
             GroupCategoryId = !IsChannel && selectedGroupCategoryId > 0 ? selectedGroupCategoryId : null,
             GroupCategoryName = !IsChannel && selectedGroupCategoryId > 0 ? groupCategories.FirstOrDefault(x => x.Id == selectedGroupCategoryId)?.Name : null,
+            TargetChannelGroupId = IsChannel ? BuildOptionalCategoryId(targetChannelGroupId) : null,
+            TargetChannelGroupName = IsChannel ? BuildChannelGroupName(BuildOptionalCategoryId(targetChannelGroupId)) : null,
+            TargetGroupCategoryId = !IsChannel ? BuildOptionalCategoryId(targetGroupCategoryId) : null,
+            TargetGroupCategoryName = !IsChannel ? BuildGroupCategoryName(BuildOptionalCategoryId(targetGroupCategoryId)) : null,
             MinSystemCreatedDays = minSystemCreatedDays,
             MaxPublicCount = maxPublicCount,
             PerAccountBatchSize = perAccountBatchSize,
@@ -359,6 +394,34 @@
             : string.Equals((value ?? string.Empty).Trim(), ChannelGroupAutomationAvatarSourceModes.Dictionary, StringComparison.OrdinalIgnoreCase)
                 ? ChannelGroupAutomationAvatarSourceModes.Dictionary
                 : ChannelGroupAutomationAvatarSourceModes.None;
+    }
+
+    private static int NormalizeOptionalCategoryId(int? value)
+    {
+        return value.HasValue ? Math.Max(0, value.Value) : -1;
+    }
+
+    private static int? BuildOptionalCategoryId(int value)
+    {
+        return value < 0 ? null : value;
+    }
+
+    private string BuildChannelGroupName(int? id)
+    {
+        if (!id.HasValue)
+            return "保持原分组";
+        if (id.Value <= 0)
+            return "未分组";
+        return channelGroups.FirstOrDefault(x => x.Id == id.Value)?.Name ?? string.Empty;
+    }
+
+    private string BuildGroupCategoryName(int? id)
+    {
+        if (!id.HasValue)
+            return "保持原分类";
+        if (id.Value <= 0)
+            return "未分类";
+        return groupCategories.FirstOrDefault(x => x.Id == id.Value)?.Name ?? string.Empty;
     }
 
     private static string ExtractDictionaryName(string? token)

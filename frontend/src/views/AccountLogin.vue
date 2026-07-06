@@ -58,9 +58,39 @@
               <div v-if="qrExpiresText" class="qr-expires">过期时间：{{ qrExpiresText }}</div>
 
               <el-form v-if="qrStatus === 'password'" label-position="top" class="qr-password-form">
+                <el-form-item label="系统账号已保存二级密码">
+                  <el-select
+                    v-model="qrStoredAccountId"
+                    class="full"
+                    filterable
+                    clearable
+                    :loading="storedAccountsLoading"
+                    placeholder="可选：选择系统中已有账号"
+                    @visible-change="onStoredAccountSelectVisible"
+                    @change="onQrStoredAccountChanged"
+                  >
+                    <el-option
+                      v-for="account in storedAccounts"
+                      :key="account.id"
+                      :label="accountLabel(account)"
+                      :value="account.id"
+                    />
+                  </el-select>
+                  <div class="muted mt-2">扫码登录无法提前识别手机号，选择对应账号后会带入系统已保存的二级密码。</div>
+                </el-form-item>
+                <el-alert
+                  v-if="qrPasswordSource"
+                  :title="qrPasswordSource"
+                  type="success"
+                  :closable="false"
+                  show-icon
+                  class="mb-3"
+                />
                 <el-form-item label="两步验证密码">
                   <el-input v-model="qrPassword" type="password" show-password @keyup.enter="submitQrPassword" />
                 </el-form-item>
+                <el-checkbox v-model="saveQrPasswordToSystem">登录成功后保存到系统</el-checkbox>
+                <div class="muted">默认不保存。重要账号建议关闭，避免二级密码长期落库。</div>
                 <el-button type="primary" :loading="logging" @click="submitQrPassword">验证密码</el-button>
               </el-form>
             </div>
@@ -120,10 +150,23 @@
         </div>
 
         <div v-else-if="currentStep === 'password'" class="step-body">
-          <el-alert title="此账号启用了两步验证，请输入密码。" type="info" :closable="false" show-icon />
+          <el-alert :title="phonePasswordAlertTitle" :type="phonePasswordSource ? 'success' : 'info'" :closable="false" show-icon />
           <el-form label-position="top" class="mt-4">
             <el-form-item label="两步验证密码">
-              <el-input v-model="password" type="password" show-password @keyup.enter="next" />
+              <el-input
+                v-model="password"
+                type="password"
+                show-password
+                :placeholder="phonePasswordLoading ? '正在查询系统已保存的二级密码' : '请输入两步验证密码'"
+                @keyup.enter="next"
+              />
+              <div class="muted mt-2">如果该手机号已存在于系统并保存过二级密码，会自动带入；也可以手动修改。</div>
+            </el-form-item>
+            <el-form-item>
+              <div>
+                <el-checkbox v-model="savePhonePasswordToSystem">登录成功后保存到系统</el-checkbox>
+                <div class="muted">默认不保存。重要账号建议关闭，避免二级密码长期落库。</div>
+              </div>
             </el-form-item>
           </el-form>
         </div>
@@ -185,7 +228,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import QRCode from 'qrcode'
 import { panelApi } from '@/api/panel'
-import type { AccountListItem, AccountLoginResponse, AccountQrLoginResponse } from '@/api/types'
+import type { AccountDetail, AccountListItem, AccountLoginResponse, AccountQrLoginResponse } from '@/api/types'
 
 type LoginStep = 'phone' | 'code' | 'password' | 'done'
 type LoginMode = 'qr' | 'phone'
@@ -209,6 +252,15 @@ const qrMessage = ref('')
 const qrExpiresAt = ref<string | null>(null)
 const qrPassword = ref('')
 const qrPolling = ref(false)
+const storedAccounts = ref<AccountListItem[]>([])
+const storedAccountsLoading = ref(false)
+const storedAccountsLoaded = ref(false)
+const qrStoredAccountId = ref<number | null>(null)
+const qrPasswordSource = ref('')
+const phonePasswordLoading = ref(false)
+const phonePasswordSource = ref('')
+const savePhonePasswordToSystem = ref(false)
+const saveQrPasswordToSystem = ref(false)
 let qrTimer: number | undefined
 
 const modeOptions = [
@@ -256,6 +308,12 @@ const qrExpiresText = computed(() => {
   return date.toLocaleTimeString()
 })
 
+const phonePasswordAlertTitle = computed(() => {
+  if (phonePasswordSource.value) return phonePasswordSource.value
+  if (phonePasswordLoading.value) return '正在查询系统中是否保存了该账号的二级密码'
+  return '此账号启用了两步验证，请输入密码。'
+})
+
 async function next() {
   if (logging.value) return
   if (currentStep.value === 'phone' && telegramApiChecked.value && !telegramApiConfigured.value) {
@@ -271,7 +329,7 @@ async function next() {
         return
       }
       const response = await panelApi.startAccountLogin({ phone: phone.value, loginId: loginId.value })
-      handleLoginResponse(response)
+      await handleLoginResponse(response)
       return
     }
 
@@ -286,7 +344,7 @@ async function next() {
         return
       }
       const response = await panelApi.submitAccountLoginCode(loginId.value, code.value)
-      handleLoginResponse(response)
+      await handleLoginResponse(response)
       return
     }
 
@@ -300,8 +358,8 @@ async function next() {
         ElMessage.warning('请输入两步验证密码')
         return
       }
-      const response = await panelApi.submitAccountLoginPassword(loginId.value, password.value)
-      handleLoginResponse(response)
+      const response = await panelApi.submitAccountLoginPassword(loginId.value, password.value, savePhonePasswordToSystem.value)
+      await handleLoginResponse(response)
     }
   } finally {
     logging.value = false
@@ -337,6 +395,9 @@ async function startQrLogin() {
   qrLoginId.value = 0
   qrDataUrl.value = ''
   qrPassword.value = ''
+  qrPasswordSource.value = ''
+  qrStoredAccountId.value = null
+  saveQrPasswordToSystem.value = false
   qrStatus.value = 'pending'
   qrMessage.value = '正在生成二维码'
 
@@ -390,10 +451,81 @@ async function submitQrPassword() {
 
   logging.value = true
   try {
-    const response = await panelApi.submitAccountQrLoginPassword(qrLoginId.value, qrPassword.value)
+    const response = await panelApi.submitAccountQrLoginPassword(qrLoginId.value, qrPassword.value, saveQrPasswordToSystem.value)
     await handleQrResponse(response)
   } finally {
     logging.value = false
+  }
+}
+
+function normalizePhoneDigits(value?: string | null) {
+  let digits = String(value || '').replace(/\D/g, '')
+  if (digits.startsWith('00')) digits = digits.slice(2)
+  return digits
+}
+
+function accountLabel(account: AccountListItem | AccountDetail) {
+  const nickname = account.nickname ? ` / ${account.nickname}` : ''
+  const username = account.username ? ` / @${account.username}` : ''
+  return `${account.displayPhone}${nickname}${username}`
+}
+
+async function ensureStoredAccountsLoaded() {
+  if (storedAccountsLoaded.value || storedAccountsLoading.value) return
+  storedAccountsLoading.value = true
+  try {
+    const result = await panelApi.accounts({ page: 1, pageSize: 500 })
+    storedAccounts.value = result.items
+    storedAccountsLoaded.value = true
+  } finally {
+    storedAccountsLoading.value = false
+  }
+}
+
+function onStoredAccountSelectVisible(visible: boolean) {
+  if (visible) void ensureStoredAccountsLoaded()
+}
+
+async function onQrStoredAccountChanged(value: number | null) {
+  qrStoredAccountId.value = value || null
+  qrPasswordSource.value = ''
+  if (!qrStoredAccountId.value) return
+
+  try {
+    const account = await panelApi.account(qrStoredAccountId.value)
+    if (!account.twoFactorPassword?.trim()) {
+      ElMessage.warning('该账号没有保存二级密码')
+      return
+    }
+
+    qrPassword.value = account.twoFactorPassword
+    qrPasswordSource.value = `已从系统账号 ${account.displayPhone} 带入已保存的二级密码`
+  } catch {
+    ElMessage.warning('读取账号已保存二级密码失败')
+  }
+}
+
+async function prefillPhonePasswordFromStoredAccount() {
+  phonePasswordSource.value = ''
+  const phoneDigits = normalizePhoneDigits(phone.value)
+  if (!phoneDigits) return
+
+  phonePasswordLoading.value = true
+  try {
+    const result = await panelApi.accounts({ page: 1, pageSize: 20, search: phoneDigits })
+    const matched = result.items.find((account) => normalizePhoneDigits(account.displayPhone) === phoneDigits)
+      || (result.items.length === 1 ? result.items[0] : null)
+    if (!matched) return
+
+    const account = await panelApi.account(matched.id)
+    if (!account.twoFactorPassword?.trim()) return
+
+    password.value = account.twoFactorPassword
+    phonePasswordSource.value = `已从系统账号 ${account.displayPhone} 带入已保存的二级密码`
+  } catch {
+    // 预填失败不影响正常手动输入
+  } finally {
+    phonePasswordLoading.value = false
   }
 }
 
@@ -423,6 +555,7 @@ async function handleQrResponse(response: AccountQrLoginResponse) {
   }
 
   if (response.status === 'password') {
+    void ensureStoredAccountsLoaded()
     ElMessage.info(response.message || '请输入两步验证密码')
     return
   }
@@ -446,14 +579,14 @@ async function resendCode() {
   logging.value = true
   try {
     const response = await panelApi.resendAccountLoginCode(loginId.value)
-    handleLoginResponse(response, false)
+    await handleLoginResponse(response, false)
     ElMessage.info(response.message || '已请求重新发送验证码')
   } finally {
     logging.value = false
   }
 }
 
-function handleLoginResponse(response: AccountLoginResponse, showMessage = true) {
+async function handleLoginResponse(response: AccountLoginResponse, showMessage = true) {
   loginId.value = response.loginId
 
   if (response.success) {
@@ -472,6 +605,7 @@ function handleLoginResponse(response: AccountLoginResponse, showMessage = true)
 
   if (response.nextStep === 'password') {
     currentStep.value = 'password'
+    await prefillPhonePasswordFromStoredAccount()
     if (showMessage) ElMessage.info(response.message || '请输入两步验证密码')
     return
   }
@@ -513,6 +647,12 @@ async function reset() {
   code.value = ''
   password.value = ''
   qrPassword.value = ''
+  qrPasswordSource.value = ''
+  qrStoredAccountId.value = null
+  phonePasswordSource.value = ''
+  phonePasswordLoading.value = false
+  savePhonePasswordToSystem.value = false
+  saveQrPasswordToSystem.value = false
   qrDataUrl.value = ''
   qrStatus.value = 'idle'
   qrMessage.value = ''
@@ -528,6 +668,12 @@ watch(loginMode, async (_value, oldValue) => {
   code.value = ''
   password.value = ''
   qrPassword.value = ''
+  qrPasswordSource.value = ''
+  qrStoredAccountId.value = null
+  phonePasswordSource.value = ''
+  phonePasswordLoading.value = false
+  savePhonePasswordToSystem.value = false
+  saveQrPasswordToSystem.value = false
   qrDataUrl.value = ''
   qrStatus.value = 'idle'
   qrMessage.value = ''

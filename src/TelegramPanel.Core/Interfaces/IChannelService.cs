@@ -68,6 +68,11 @@ public interface IChannelService
     Task<bool> DisbandChannelAsync(int accountId, long channelId);
 
     /// <summary>
+    /// 转让频道所有权（需要当前创建者执行，并提供当前创建者的二级密码）。
+    /// </summary>
+    Task<bool> TransferOwnershipAsync(int accountId, long channelId, string targetUsername, string password);
+
+    /// <summary>
     /// 导出频道加入链接：公开频道返回 t.me 链接；私密频道导出邀请链接（需要权限）。
     /// </summary>
     Task<string> ExportJoinLinkAsync(int accountId, long channelId);

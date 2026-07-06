@@ -149,16 +149,21 @@
 
       <el-row :gutter="12">
         <el-col :span="12">
-          <el-form-item label="数量上限">
+          <el-form-item label="每账号累计创建上限">
             <el-input-number v-model="forms.privateCreate.systemCreatedLimit" :min="1" :max="100000" class="full" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="每账号数量">
+          <el-form-item label="本轮每账号创建数">
             <el-input-number v-model="forms.privateCreate.perAccountBatchSize" :min="1" :max="1000" class="full" />
           </el-form-item>
         </el-col>
       </el-row>
+      <div class="form-hint">
+        每账号累计创建上限：统计该账号已由系统任务创建并记录的频道/群组数量，达到上限后本轮不会继续创建。
+        本轮每账号创建数：本次任务里每个账号最多创建几个。比如上限 10、某账号已有 9 个、本轮每账号创建数填 5，
+        该账号本轮最多也只会再创建 1 个。
+      </div>
 
       <el-form-item label="标题模板">
         <el-input v-model="forms.privateCreate.titleTemplate" placeholder="支持 {time} 和文本字典变量，例如：临时频道{time}" />
@@ -207,24 +212,43 @@
           <el-option v-for="item in groupCategories" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
+      <el-form-item v-if="forms.publicize.targetType === 'channel'" label="公开后分组">
+        <el-select v-model="forms.publicize.targetChannelGroupId" class="full">
+          <el-option label="保持原分组" :value="-1" />
+          <el-option label="移动到未分组" :value="0" />
+          <el-option v-for="item in channelGroups" :key="item.id" :label="item.name" :value="item.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-else label="公开后分类">
+        <el-select v-model="forms.publicize.targetGroupCategoryId" class="full">
+          <el-option label="保持原分类" :value="-1" />
+          <el-option label="移动到未分类" :value="0" />
+          <el-option v-for="item in groupCategories" :key="item.id" :label="item.name" :value="item.id" />
+        </el-select>
+      </el-form-item>
 
       <el-row :gutter="12">
         <el-col :span="8">
-          <el-form-item label="创建天数">
+          <el-form-item label="私密创建满天数">
             <el-input-number v-model="forms.publicize.minSystemCreatedDays" :min="0" :max="3650" class="full" />
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="公开上限">
+          <el-form-item label="每账号公开保有上限">
             <el-input-number v-model="forms.publicize.maxPublicCount" :min="1" :max="1000" class="full" />
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="每账号数量">
+          <el-form-item label="本轮每账号处理数">
             <el-input-number v-model="forms.publicize.perAccountBatchSize" :min="1" :max="1000" class="full" />
           </el-form-item>
         </el-col>
       </el-row>
+      <div class="form-hint">
+        私密创建满天数：只公开系统记录为私密创建、且已创建达到该天数以上的频道/群组。
+        这个限制用于避免刚创建的私密资源太快公开，降低风控和封禁风险。
+        公开后分组/分类默认保持原值，也可以在公开成功后自动移动到指定分组。
+      </div>
 
       <el-form-item label="标题模板">
         <el-input v-model="forms.publicize.titleTemplate" placeholder="支持 {time} 和文本字典变量" />
@@ -524,6 +548,8 @@ function applyInitialConfig() {
     form.targetType = normalizeObjectType(readString(cfg.target_type, 'channel'))
     form.channelGroupId = readNumber(cfg.channel_group_id, 0)
     form.groupCategoryId = readNumber(cfg.group_category_id, 0)
+    form.targetChannelGroupId = readOptionalCategoryId(cfg.target_channel_group_id)
+    form.targetGroupCategoryId = readOptionalCategoryId(cfg.target_group_category_id)
     form.minSystemCreatedDays = Math.max(0, readNumber(cfg.min_system_created_days, 0))
     form.maxPublicCount = Math.max(1, readNumber(cfg.max_public_count, 10))
     form.perAccountBatchSize = Math.max(1, readNumber(cfg.per_account_batch_size, 1))
@@ -683,6 +709,8 @@ function buildPublicizeDraft(): TaskConfigDraft {
   validateAvatar(form.avatarSource, form.fixedAvatarAssetPath, form.avatarDictionaryName)
 
   const isChannel = form.targetType === 'channel'
+  const targetChannelGroupId = normalizeOptionalCategoryId(form.targetChannelGroupId)
+  const targetGroupCategoryId = normalizeOptionalCategoryId(form.targetGroupCategoryId)
   const config = {
     category_ids: categoryIds,
     category_names: selectedCategories.map((x) => x.name),
@@ -691,6 +719,10 @@ function buildPublicizeDraft(): TaskConfigDraft {
     channel_group_name: isChannel && form.channelGroupId > 0 ? channelGroups.value.find((x) => x.id === form.channelGroupId)?.name || null : null,
     group_category_id: !isChannel && form.groupCategoryId > 0 ? form.groupCategoryId : null,
     group_category_name: !isChannel && form.groupCategoryId > 0 ? groupCategories.value.find((x) => x.id === form.groupCategoryId)?.name || null : null,
+    target_channel_group_id: isChannel ? targetChannelGroupId : null,
+    target_channel_group_name: isChannel ? optionalChannelGroupName(targetChannelGroupId) : null,
+    target_group_category_id: !isChannel ? targetGroupCategoryId : null,
+    target_group_category_name: !isChannel ? optionalGroupCategoryName(targetGroupCategoryId) : null,
     min_system_created_days: Math.max(0, form.minSystemCreatedDays),
     max_public_count: Math.max(1, form.maxPublicCount),
     per_account_batch_size: Math.max(1, form.perAccountBatchSize),
@@ -881,6 +913,8 @@ function defaultPublicizeForm() {
     targetType: 'channel',
     channelGroupId: 0,
     groupCategoryId: 0,
+    targetChannelGroupId: -1,
+    targetGroupCategoryId: -1,
     titleTemplate: '',
     descriptionTemplate: '',
     usernameTemplate: '',
@@ -921,6 +955,30 @@ function uniqueLines(value: string) {
 
 function normalizedSelectedIds(values: number[]) {
   return Array.from(new Set(values.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)))
+}
+
+function readOptionalCategoryId(value: unknown) {
+  if (value === null || value === undefined) return -1
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : -1
+}
+
+function normalizeOptionalCategoryId(value: number) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.trunc(n)
+}
+
+function optionalChannelGroupName(id: number | null) {
+  if (id === null) return '保持原分组'
+  if (id <= 0) return '未分组'
+  return channelGroups.value.find((x) => x.id === id)?.name || null
+}
+
+function optionalGroupCategoryName(id: number | null) {
+  if (id === null) return '保持原分类'
+  if (id <= 0) return '未分类'
+  return groupCategories.value.find((x) => x.id === id)?.name || null
 }
 
 function normalizeIds(value: unknown, fallback = 0) {
