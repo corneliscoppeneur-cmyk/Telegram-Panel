@@ -14,7 +14,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="该扩展提供的是模块原生页面，已在当前界面内加载。"
+        title="该扩展使用旧版兼容页面，已在当前界面内加载。"
       />
 
       <div class="generic-module-frame-wrap mt-3">

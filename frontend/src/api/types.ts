@@ -420,6 +420,7 @@ export interface ModuleNavItem {
   order: number
   moduleId: string
   pageKey?: string | null
+  uiMode?: 'direct' | 'legacy' | string
 }
 
 export interface CreateChatMembershipTaskRequest {

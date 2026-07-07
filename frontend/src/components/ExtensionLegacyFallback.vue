@@ -9,14 +9,14 @@
     >
       <div class="extension-error-body">
         <div>{{ loadError.description }}</div>
-        <div class="cell-sub">已自动回退到模块原生页面，旧模块功能可以继续使用。</div>
+        <div class="cell-sub">已自动回退到模块自带兼容页面，旧模块功能可以继续使用。</div>
         <div v-if="loadError.status" class="cell-sub">HTTP 状态：{{ loadError.status }}</div>
         <div v-if="loadError.module" class="cell-sub">
           模块版本：{{ loadError.module.activeVersion || '-' }}；Last Good：{{ loadError.module.lastGoodVersion || '-' }}
         </div>
         <div class="toolbar mt-3">
           <el-button size="small" type="primary" @click="$emit('retry')">重新加载 Vue 页面</el-button>
-          <el-button size="small" @click="openStandalone">新窗口打开旧页面</el-button>
+          <el-button size="small" @click="openStandalone">新窗口打开兼容页面</el-button>
           <el-button size="small" @click="router.push('/modules')">打开模块管理</el-button>
         </div>
       </div>

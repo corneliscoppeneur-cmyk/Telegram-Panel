@@ -563,9 +563,69 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 
 否则会出现“包结构看似正常，但 Telegram Desktop 仍要求重新登录”。
 
-## 旧版 UI 模块项目模板（Razor 组件，兼容模式）
+## 新模块默认不要写 Razor 页面
 
-主后台已经迁移到 Vue。新模块不建议再把复杂管理界面写成 Razor 组件；推荐模块提供 `/api/panel/extensions/{module-slug}` 管理接口，由宿主 Vue 页面承载操作界面。
+主后台已经迁移到 Vue。这个迁移只改变宿主后台，不会自动把外部模块的 Razor 页面改成 Vue。模块如果继续通过 `IModuleUiProvider.GetPages` 注册页面，仍然会走 Blazor Server 兼容入口。
+
+新模块需要管理界面时，优先选下面两种方式：
+
+1. **宿主 Vue 原生页**：页面写在宿主 `frontend/src/views/extensions/`，模块只提供 `/api/panel/extensions/{module-slug}` 管理接口。
+2. **模块自带静态 Vue 页**：模块使用普通 `Microsoft.NET.Sdk`，在 `wwwroot/` 放 `settings.html`、Vue、CSS、JS，并在 `MapEndpoints` 中自己暴露 `/ext/{moduleId}/settings` 和静态资源。
+
+只有旧模块、临时过渡页面，或确实需要复用 Blazor 组件时，才使用下面的 Razor 兼容模式。
+
+### 模块自带静态 Vue 页模板
+
+静态 Vue 页不依赖 Blazor Server，也不需要 `MudBlazor`。模块项目建议使用普通 SDK：
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/TelegramPanel.Modules.Abstractions/TelegramPanel.Modules.Abstractions.csproj" />
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
+```
+
+模块入口负责暴露页面和 API：
+
+```csharp
+public void MapEndpoints(IEndpointRouteBuilder endpoints, ModuleHostContext context)
+{
+    var page = endpoints.MapGet("/ext/example.module/settings", GetSettingsPageAsync);
+    var api = endpoints.MapGroup("/api/panel/extensions/example-module");
+    api.MapGet("", GetStateAsync);
+    api.MapPost("", SaveStateAsync);
+}
+
+public IEnumerable<ModuleNavItem> GetNavItems(ModuleHostContext context)
+{
+    yield return new ModuleNavItem
+    {
+        Title = "模块设置",
+        Href = "/ext/example.module/settings",
+        Group = "扩展模块",
+        Order = 100
+    };
+}
+
+public IEnumerable<ModulePageDefinition> GetPages(ModuleHostContext context)
+    => Array.Empty<ModulePageDefinition>();
+```
+
+要点：
+
+- 不实现旧 Razor 页面时，`GetPages()` 返回空。
+- 静态资源不会被宿主自动映射，模块必须自己在 `MapEndpoints` 中提供资源访问接口，或把脚本样式内联到 HTML。
+- 修改页面/API 后必须递增 `manifest.json` 的版本，重新打包并更新生产模块包。
+- 如果线上仍看到旧 Razor 页面，通常是生产环境还装着旧 `.tpm`，或模块加载失败后回滚到了 `LastGoodVersion`。
+
+## 旧版 UI 模块项目模板（Razor 组件，兼容模式）
 
 如果你的模块已经有旧页面，或暂时没有对应的 Vue 原生页面，仍可以通过 `IModuleUiProvider.GetPages` 提供兼容 Razor 页面。此时可以把模块做成 `Microsoft.NET.Sdk.Razor` 项目（类似 Razor Class Library），例如：
 
@@ -589,12 +649,13 @@ public sealed class MyAiReplyHandler : IModuleTaskHandler
 
 ## Vue 后台迁移后的模块页面约定
 
-后台管理界面已经迁移到 Vue SPA，入口在 `/ui` 下。模块开发时需要区分两种页面形态：
+后台管理界面已经迁移到 Vue SPA，入口在 `/ui` 下。模块开发时需要区分三种页面形态：
 
 1. **宿主 Vue 原生页面**：页面代码在宿主 `frontend/src/views/extensions/`，数据由模块提供 `/api/panel/extensions/{slug}` 管理接口。
-2. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}` 作为兼容入口。
+2. **模块自带静态 Vue 页面**：页面和前端资源随 `.tpm` 打包，由模块自己的 endpoint 返回，通常入口是 `/ext/{moduleId}/settings`。
+3. **模块原生 Razor 页面**：继续通过 `IModuleUiProvider.GetPages` 注册，宿主仍保留 `/ext/{moduleId}/{pageKey}` 作为兼容入口。
 
-新模块默认按第一种方式设计。也就是说，模块负责能力、配置、运行态数据和保存接口，宿主 Vue 后台负责页面呈现。只有旧模块、简单页面或暂时没有 Vue 原生页面时，才继续使用 Razor 兼容页面。
+新模块默认按第一种或第二种方式设计。也就是说，模块负责能力、配置、运行态数据和保存接口，页面要么由宿主 Vue 承载，要么由模块自带静态 Vue 页承载。只有旧模块、简单页面或暂时没有 Vue 页面时，才继续使用 Razor 兼容页面。
 
 如果模块没有被宿主 Vue 页面接管，不需要为了 Vue 迁移重写模块。宿主的通用 Vue 页面会用 iframe 加载旧模块页面：
 
@@ -640,7 +701,9 @@ public void MapEndpoints(IEndpointRouteBuilder endpoints, ModuleHostContext cont
 
 ### 导航与路由怎么写
 
-模块仍然可以通过 `GetNavItems` 返回 `/ext/{moduleId}/{pageKey}`。宿主会把模块导航转换到 Vue 路由下，不需要在模块里硬编码 `/ui`。
+模块仍然可以通过 `GetNavItems` 返回 `/ext/{moduleId}/settings`。如果这个链接来自 `GetNavItems`，Vue 菜单会按模块自带页面处理，点击后直接进入该 endpoint。
+
+旧 Razor 页面不要只靠 `GetNavItems` 注册，应该通过 `GetPages()` 返回 `ModulePageDefinition`。宿主会把 `GetPages()` 注册的页面转换成 `/ui/ext/{moduleId}/{pageKey}` 兼容路由，并用 iframe 加载 `/ext/{moduleId}/{pageKey}?legacy=1&embed=1`。
 
 ```csharp
 public IEnumerable<ModuleNavItem> GetNavItems(ModuleHostContext context)

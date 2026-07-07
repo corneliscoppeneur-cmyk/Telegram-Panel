@@ -4260,7 +4260,8 @@ public static class PanelAdminApiEndpoints
                 x.Item.Definition.Group,
                 x.Item.Definition.Order,
                 x.Item.Module.Id,
-                null)));
+                null,
+                "direct")));
 
         items.AddRange(contributions.Pages
             .OrderBy(x => x.Definition.Group ?? "", StringComparer.OrdinalIgnoreCase)
@@ -4279,7 +4280,8 @@ public static class PanelAdminApiEndpoints
                 x.Page.Definition.Group,
                 x.Page.Definition.Order,
                 x.Page.Module.Id,
-                x.Page.Definition.Key)));
+                x.Page.Definition.Key,
+                "legacy")));
 
         return Task.FromResult<IResult>(Results.Ok(items));
     }
@@ -6185,7 +6187,8 @@ public sealed record ModuleNavItemDto(
     string? Group,
     int Order,
     string ModuleId,
-    string? PageKey);
+    string? PageKey,
+    string UiMode);
 
 public sealed record DataDictionaryDto(
     int Id,

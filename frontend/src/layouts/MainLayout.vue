@@ -241,6 +241,7 @@ interface MenuItem {
   index: string
   label: string
   icon: string
+  external?: boolean
   children?: MenuItem[]
 }
 
@@ -310,6 +311,7 @@ const menuItems = computed<MenuItem[]>(() => {
       index: normalizeModuleHref(item.href),
       label: item.title,
       icon: resolveModuleIcon(item),
+      external: item.uiMode === 'direct',
     }))
 
   if (extensionChildren.length > 0) {
@@ -323,6 +325,16 @@ const menuItems = computed<MenuItem[]>(() => {
   }
 
   return items
+})
+
+const directModuleRoutes = computed(() => {
+  const routes = new Set<string>()
+  for (const item of moduleNavItems.value) {
+    if (item.uiMode !== 'direct') continue
+    const href = normalizeModuleHref(item.href)
+    if (href) routes.add(href)
+  }
+  return routes
 })
 
 function onResize() {
@@ -358,6 +370,11 @@ function handleSelect(index: string) {
     return
   }
 
+  if (isDirectModuleRoute(index)) {
+    window.location.href = index
+    return
+  }
+
   router.push(index)
 }
 
@@ -382,6 +399,10 @@ function normalizeModuleHref(href: string) {
   if (href.startsWith('/ui/')) return href.slice(3) || '/'
   if (href.startsWith('/')) return href
   return `/${href}`
+}
+
+function isDirectModuleRoute(index: string) {
+  return directModuleRoutes.value.has(index)
 }
 
 function resolveModuleIcon(item: ModuleNavItem) {

@@ -721,18 +721,28 @@ function goCreateTarget() {
   if (!currentCreateTarget.value) return
   createDialog.value.visible = false
   moduleWindow.value.visible = false
+  if (isModuleEndpointRoute(currentCreateTarget.value)) {
+    window.location.href = currentCreateTarget.value
+    return
+  }
   router.push(currentCreateTarget.value)
 }
 
 function openCreateTargetWindow() {
   if (!currentCreateTarget.value) return
   const separator = currentCreateTarget.value.includes('?') ? '&' : '?'
-  const resolved = router.resolve(`${currentCreateTarget.value}${separator}embed=1`)
+  const src = isModuleEndpointRoute(currentCreateTarget.value)
+    ? `${currentCreateTarget.value}${separator}embed=1`
+    : router.resolve(`${currentCreateTarget.value}${separator}embed=1`).href
   moduleWindow.value = {
     visible: true,
     title: `${taskName(createDialog.value.form.taskType)} - 任务配置`,
-    src: resolved.href,
+    src,
   }
+}
+
+function isModuleEndpointRoute(route: string) {
+  return route.startsWith('/ext/')
 }
 
 function defaultTotalForTask(taskType: string) {
