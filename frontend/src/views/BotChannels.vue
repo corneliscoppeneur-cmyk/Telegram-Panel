@@ -76,24 +76,36 @@
         <el-table-column v-if="isColumnVisible('syncedAt')" label="最后同步" width="180">
           <template #default="{ row }">{{ formatTime(row.syncedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="190" fixed="right">
+        <el-table-column label="操作" :width="isCompactList ? 70 : 190" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
-              <el-tooltip content="检测状态" placement="top">
+              <el-tooltip v-if="!isCompactList" content="检测状态" placement="top">
                 <el-button link :icon="CircleCheck" :disabled="filters.botId <= 0" @click="checkStatus([row.id])" />
               </el-tooltip>
-              <el-tooltip content="复制链接" placement="top">
+              <el-tooltip v-if="!isCompactList" content="复制链接" placement="top">
                 <el-button link :icon="Link" :disabled="filters.botId <= 0" @click="copyLink(row)" />
               </el-tooltip>
-              <el-tooltip content="查看详情" placement="top">
+              <el-tooltip v-if="!isCompactList" content="查看详情" placement="top">
                 <el-button link :icon="View" @click="openDetail(row)" />
               </el-tooltip>
-              <el-tooltip content="编辑频道" placement="top">
+              <el-tooltip v-if="!isCompactList" content="编辑频道" placement="top">
                 <el-button link type="primary" :icon="Edit" :disabled="filters.botId <= 0" @click="openEditChannel(row)" />
               </el-tooltip>
-              <el-tooltip content="删除频道" placement="top">
+              <el-tooltip v-if="!isCompactList" content="删除频道" placement="top">
                 <el-button link type="danger" :icon="Delete" @click="openDeleteBindings([row])" />
               </el-tooltip>
+              <el-dropdown v-if="isCompactList" trigger="click">
+                <el-button link :icon="MoreFilled" />
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item :icon="CircleCheck" :disabled="filters.botId <= 0" @click="checkStatus([row.id])">检测状态</el-dropdown-item>
+                    <el-dropdown-item :icon="Link" :disabled="filters.botId <= 0" @click="copyLink(row)">复制链接</el-dropdown-item>
+                    <el-dropdown-item :icon="View" @click="openDetail(row)">查看详情</el-dropdown-item>
+                    <el-dropdown-item :icon="Edit" :disabled="filters.botId <= 0" @click="openEditChannel(row)">编辑频道</el-dropdown-item>
+                    <el-dropdown-item divided :icon="Delete" @click="openDeleteBindings([row])">删除频道</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </template>
         </el-table-column>
@@ -455,12 +467,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type { UploadFile } from 'element-plus'
-import { ArrowDown, CircleCheck, Delete, Edit, Link, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
+import { ArrowDown, CircleCheck, Delete, Edit, Link, MoreFilled, Plus, Refresh, Select, View } from '@element-plus/icons-vue'
 import { panelApi } from '@/api/panel'
 import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { BotBinding, BotChannelListItem, BotChannelRemoteInfo, BotManagementItem, ChatAdmin, NumberPreset, OperationAccount, SimpleCategory, TextPreset } from '@/api/types'
 import { formatTime } from '@/utils/format'
 import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
+import { useMediaQuery } from '@/utils/useMediaQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -477,6 +490,7 @@ const channelAdminPresets = ref<TextPreset[]>([])
 const botAdminPresets = ref<NumberPreset[]>([])
 const tableRef = ref<TableInstance>()
 const selectedRows = ref<BotChannelListItem[]>([])
+const isCompactList = useMediaQuery('(max-width: 640px)')
 let searchTimer: number | undefined
 let selectionMode: 'select' | 'invert' | 'clear' = 'select'
 

@@ -97,30 +97,32 @@
         <el-table-column v-if="isColumnVisible('syncedAt')" label="最后同步" width="180">
           <template #default="{ row }">{{ formatTime(row.syncedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" :width="isCompactList ? 70 : 280" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
-              <el-tooltip content="查看详情" placement="top">
+              <el-tooltip v-if="!isCompactList" content="查看详情" placement="top">
                 <el-button link type="primary" :icon="View" @click="showDetails(row)" />
               </el-tooltip>
-              <el-tooltip v-if="kind === 'channel'" content="编辑频道" placement="top">
+              <el-tooltip v-if="!isCompactList && kind === 'channel'" content="编辑频道" placement="top">
                 <el-button link type="primary" :icon="Edit" @click="openEdit(row)" />
               </el-tooltip>
               <el-dropdown>
                 <el-button link :icon="MoreFilled" />
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-if="kind === 'channel'" @click="openChannelInvite([row.id])">邀请成员</el-dropdown-item>
-                  <el-dropdown-item v-if="kind === 'channel'" @click="openChannelAdmins([row.id])">设置管理员</el-dropdown-item>
-                  <el-dropdown-item v-if="kind === 'channel'" @click="openChannelKick([row.id])">踢人</el-dropdown-item>
-                  <el-dropdown-item @click="showSystemAccounts(row)">本系统账号</el-dropdown-item>
-                  <el-dropdown-item @click="copyLink(row)">复制链接</el-dropdown-item>
-                  <el-dropdown-item divided @click="openTransferOwner(row)">转让所有权</el-dropdown-item>
-                  <el-dropdown-item @click="leaveOne(row)">退出{{ kindName }}</el-dropdown-item>
-                  <el-dropdown-item @click="disbandOne(row)">解散{{ kindName }}</el-dropdown-item>
-                  <el-dropdown-item @click="deleteOne(row)">删除{{ kindName }}</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="isCompactList" :icon="View" @click="showDetails(row)">查看详情</el-dropdown-item>
+                    <el-dropdown-item v-if="isCompactList && kind === 'channel'" :icon="Edit" @click="openEdit(row)">编辑频道</el-dropdown-item>
+                    <el-dropdown-item v-if="kind === 'channel'" @click="openChannelInvite([row.id])">邀请成员</el-dropdown-item>
+                    <el-dropdown-item v-if="kind === 'channel'" @click="openChannelAdmins([row.id])">设置管理员</el-dropdown-item>
+                    <el-dropdown-item v-if="kind === 'channel'" @click="openChannelKick([row.id])">踢人</el-dropdown-item>
+                    <el-dropdown-item @click="showSystemAccounts(row)">本系统账号</el-dropdown-item>
+                    <el-dropdown-item @click="copyLink(row)">复制链接</el-dropdown-item>
+                    <el-dropdown-item divided @click="openTransferOwner(row)">转让所有权</el-dropdown-item>
+                    <el-dropdown-item @click="leaveOne(row)">退出{{ kindName }}</el-dropdown-item>
+                    <el-dropdown-item @click="disbandOne(row)">解散{{ kindName }}</el-dropdown-item>
+                    <el-dropdown-item @click="deleteOne(row)">删除{{ kindName }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
               </el-dropdown>
             </div>
           </template>
@@ -494,6 +496,7 @@ import ColumnVisibilityMenu from '@/components/ColumnVisibilityMenu.vue'
 import type { ChannelListItem, ChatAdmin, ChatMembershipAccount, GroupListItem, OperationAccount, SimpleCategory, TextPreset } from '@/api/types'
 import { formatTime } from '@/utils/format'
 import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
+import { useMediaQuery } from '@/utils/useMediaQuery'
 
 type Kind = 'channel' | 'group'
 type Row = ChannelListItem | GroupListItem
@@ -515,6 +518,7 @@ const invitePresets = ref<TextPreset[]>([])
 const adminPresets = ref<TextPreset[]>([])
 const tableRef = ref<TableInstance>()
 const selectedRows = ref<Row[]>([])
+const isCompactList = useMediaQuery('(max-width: 640px)')
 let searchTimer: number | undefined
 let selectionMode: 'select' | 'invert' | 'clear' = 'select'
 

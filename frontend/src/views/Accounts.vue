@@ -125,22 +125,25 @@
         <el-table-column v-if="isColumnVisible('lastSyncAt')" label="最后数据同步" min-width="170">
           <template #default="{ row }">{{ formatTime(row.lastSyncAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" :width="isCompactList ? 70 : 180" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
-              <el-tooltip content="查看详情" placement="top">
+              <el-tooltip v-if="!isCompactList" content="查看详情" placement="top">
                 <el-button link type="primary" :icon="InfoFilled" @click="openDetails(row)" />
               </el-tooltip>
-              <el-tooltip content="编辑用户资料" placement="top">
+              <el-tooltip v-if="!isCompactList" content="编辑用户资料" placement="top">
                 <el-button link type="primary" :icon="Edit" :disabled="loading" @click="openProfile(row)" />
               </el-tooltip>
-              <el-tooltip content="刷新 Telegram 状态" placement="top">
+              <el-tooltip v-if="!isCompactList" content="刷新 Telegram 状态" placement="top">
                 <el-button link type="primary" :icon="Refresh" :disabled="loading" @click="refreshStatus(row)" />
               </el-tooltip>
               <el-dropdown trigger="click" @command="(command: string | number | object) => handleRowCommand(String(command), row)">
                 <el-button link :icon="MoreFilled" />
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item v-if="isCompactList" command="details" :icon="InfoFilled">查看详情</el-dropdown-item>
+                    <el-dropdown-item v-if="isCompactList" command="profile" :icon="Edit" :disabled="loading">编辑用户资料</el-dropdown-item>
+                    <el-dropdown-item v-if="isCompactList" command="refresh" :icon="Refresh" :disabled="loading">刷新 Telegram 状态</el-dropdown-item>
                     <el-dropdown-item command="join" :icon="UserFilled">加群/订阅</el-dropdown-item>
                     <el-dropdown-item command="leave" :icon="SwitchButton">退群/退订</el-dropdown-item>
                     <el-dropdown-item command="channels" :icon="Promotion">查看加入的频道</el-dropdown-item>
@@ -592,6 +595,7 @@ import type {
 import { formatTime } from '@/utils/format'
 import { accountCategoryTagStyle } from '@/utils/categoryStyle'
 import { usePersistentColumnVisibility, type ColumnVisibilityOption } from '@/utils/columnVisibility'
+import { useMediaQuery } from '@/utils/useMediaQuery'
 
 type Row = AccountListItem & { busy?: boolean }
 type SelectionMode = 'select' | 'invert' | 'clear'
@@ -608,6 +612,7 @@ const batchChatMembershipRef = ref<InstanceType<typeof BatchChatMembershipDialog
 const batchRecoveryEmailRef = ref<InstanceType<typeof BatchRecoveryEmailDialog>>()
 const selectedRows = ref<Row[]>([])
 const selectionMode = ref<SelectionMode>('select')
+const isCompactList = useMediaQuery('(max-width: 640px)')
 const filters = reactive({
   categoryId: null as number | null,
   search: '',
@@ -1521,6 +1526,15 @@ function handleBatchCommand(command: string) {
 
 function handleRowCommand(command: string, row: Row) {
   switch (command) {
+    case 'details':
+      openDetails(row)
+      break
+    case 'profile':
+      openProfile(row)
+      break
+    case 'refresh':
+      refreshStatus(row)
+      break
     case 'join':
       openChatDialog('join', [row.id])
       break
