@@ -845,7 +845,8 @@ app.Use(async (context, next) =>
         && Directory.Exists(spaRoot)
         && (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
         && !context.Request.Query.ContainsKey("legacy")
-        && vueTarget != null)
+        && vueTarget != null
+        && !string.Equals(normalizedRequestPath, vueTarget, StringComparison.OrdinalIgnoreCase))
     {
         context.Response.Redirect(vueTarget + context.Request.QueryString, permanent: false);
         return;
